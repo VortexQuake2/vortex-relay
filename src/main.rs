@@ -1,160 +1,104 @@
-mod instance;
 mod character;
+mod discord;
+mod instance;
+mod messages;
+mod proto;
+mod serverlist;
 
-use std::env;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
-use log::{debug, info, trace};
-use tokio::io::{self};
-use tokio::sync::mpsc::{Receiver, Sender};
-use crate::instance::{Instance, InstanceCommand};
+use crate::discord::{make_discord_bot, DISCORD_CHANNEL};
+use crate::instance::GameServer;
+use crate::messages::BusAction;
+use crate::serverlist::{BusContext, GameServerList, SharedBusContext, VortexServer};
 use colog;
-use serenity::all::{ChannelId, Context, CreateMessage, GatewayIntents, Message, Ready};
-use serenity::{async_trait, Client};
+use log::{debug, info, trace};
 use serenity::all::Channel::Guild;
-use serenity::client::EventHandler;
+use serenity::all::{ChannelId, CreateMessage};
+use std::env;
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::io::{self};
 use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc::Receiver;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-#[serde(tag = "t")]
-enum ClientCommand {
-    Exit,
-    Relay { message: String },
-}
-
-#[derive(Debug, Clone)]
-struct VortexServer {
-    id: u32,
-    address: SocketAddr,
-    server_channel: Sender<InstanceCommand>,
-}
-
-type ServerList = Arc<Mutex<Vec<VortexServer>>>;
-
-fn get_server_address(clients: &ServerList, id: u32) -> String {
-    let lock = clients.try_lock().unwrap();
-    lock.iter()
-        .find(|x| x.id == id)
-        .map_or("unknown".to_string(), |x| x.address.to_string())
-}
-
-struct VrxDiscordHandler {
-    transmitter: Sender<InstanceCommand>,
-    receive_channels: Vec<u64>,
-}
-
-const DISCORD_CHANNEL: u32 = 0x7FFFFFF;
-
-#[async_trait]
-impl EventHandler for VrxDiscordHandler {
-    async fn message(&self, _ctx: Context, new_message: Message) {
-        if new_message.author.bot {
-            return;
-        }
-        
-        if !self.receive_channels.contains(&new_message.channel_id.get()) {
-            return;
-        }
-        
-        let author = new_message.author.name.clone();
-        let content = new_message.content.clone();
-        let chan = new_message.channel_id.name(&_ctx).await.unwrap_or("unknown".to_string());
-        self.transmitter.send(InstanceCommand::Relay { 
-            id: DISCORD_CHANNEL, 
-            message: format!("{author}#{chan}: {content}") 
-        }).await.ok();
-    }
-
-    async fn ready(&self, _ctx: Context, data_about_bot: Ready) {
-        info!("Discord: Connected as {}", data_about_bot.user.name);
-    }
-}
-
-struct DiscordContext {
+pub struct DiscordContext {
     http: Option<Arc<serenity::http::Http>>,
-    send_channel: Option<u64>
+    send_channel: Option<u64>,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    env::set_var("RUST_LOG", "none,vrxbridge=info");
     dotenvy::dotenv().ok();
-    
     colog::init();
-    let clients_list = Arc::new(Mutex::new(Vec::<VortexServer>::new()));
-    let (maintx, mainrx) = tokio::sync::mpsc::channel(32);
-    
-    // let res = rmp_serde::to_vec(&ClientCommand::Relay { message: "Polzard: Polzard: say a".to_string() }).unwrap();
-    // hexdump::hexdump(&res);
 
-    let token = env::var("DISCORD_TOKEN").ok();
-    let mut task_discord: Option<JoinHandle<()>> = None;
-    let mut discord_http = None;
+    // simple list of keys in server environment
+    let authorized_keys = env::var("SERVER_KEYS")
+        .map(|f| f.split(",").map(|s| s.trim().to_string()).collect())
+        .unwrap_or(Vec::new());
+
+    let (bus_tx, bus_rx) = tokio::sync::mpsc::channel(32);
+    let bus = SharedBusContext::new(BusContext {
+        authorized_keys,
+        bus_tx: bus_tx.clone(),
+    });
+
+    let game_server_list = GameServerList::new(&bus);
+
     let send_channel = env::var("DISCORD_SEND_CHANNEL")
         .unwrap_or("0".to_string())
         .parse()
         .ok();
-    
-    if token.is_some() {
-        let token = token.unwrap();
 
-        let receive_channels_str = env::var("DISCORD_RECEIVE_CHANNELS")
-            .unwrap_or("".to_string());
-        let receive_channels: Vec<u64> = receive_channels_str
-            .split(",")
-            .map(|x| x.parse().unwrap()).collect();
-        let client = Client::builder(&token, 
-                                     GatewayIntents::GUILD_MESSAGES | 
-                                         GatewayIntents::MESSAGE_CONTENT)
-            .event_handler(VrxDiscordHandler {
-                transmitter: maintx.clone(),
-                receive_channels
-            })
-            .await
-            .expect("Err creating client");
+    let discord_bot = make_discord_bot(&bus_tx).await;
+    let mut task_discord = None;
+    let mut discord_http = None;
 
-        discord_http = Some(client.http.clone());
-
-        task_discord = Some(tokio::spawn(async move {
-            let mut client = client;
-            if let Err(why) = client.start().await {
-                println!("Client error: {:?}", why);
-            }
-        }));
+    if let Some((task, http)) = discord_bot {
+        task_discord = Some(task);
+        discord_http = Some(http);
     }
-    
+
     // server intercommunication
     info!("Starting server message pump");
-    let clients = Arc::clone(&clients_list);
-    let task_isc = tokio::spawn(async move {
-        server_message_pump(mainrx, clients, DiscordContext {
-            http: discord_http,
-            send_channel
-        }).await;
+
+    // "inter-server communication"
+    let clients = game_server_list.clone();
+    let task_bus = tokio::spawn(async move {
+        bus_message_pump(
+            bus_rx,
+            clients,
+            DiscordContext {
+                http: discord_http,
+                send_channel,
+            },
+        )
+        .await;
     });
 
+    let clients = game_server_list.clone();
     let task_listener = tokio::spawn(async move {
-        relay_listener(clients_list, maintx).await;
+        relay_listener(clients).await;
     });
-    
+
     if let Some(task_discord) = task_discord {
-        let (r1, r2, r3) = tokio::join!(task_isc, task_listener, task_discord);
-        r1.unwrap();
-        r2.unwrap();
-        r3.unwrap();
+        let (r1, r2, r3) = tokio::join!(task_bus, task_listener, task_discord);
+        r1?;
+        r2?;
+        r3?;
     } else {
-        let (r1, r2) = tokio::join!(task_isc, task_listener);
-        r1.unwrap();
-        r2.unwrap();
+        let (r1, r2) = tokio::join!(task_bus, task_listener);
+        r1?;
+        r2?;
     }
-   
-    
+
     Ok(())
 }
 
-async fn relay_listener(clients_list: Arc<Mutex<Vec<VortexServer>>>, maintx: Sender<InstanceCommand>) {
+async fn relay_listener(mut clients_list: GameServerList) {
     let port = env::var("PORT").unwrap_or("9999".to_string());
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
+        .await
+        .unwrap();
     let addr_whitelist = env::var("ADDR_WHITELIST").unwrap_or("".to_string());
     let addr_whitelist: Vec<IpAddr> = addr_whitelist
         .split(",")
@@ -168,23 +112,28 @@ async fn relay_listener(clients_list: Arc<Mutex<Vec<VortexServer>>>, maintx: Sen
     loop {
         let (socket, address) = listener.accept().await.unwrap();
         let (server_channel, rx) = tokio::sync::mpsc::channel(32);
-        
+        let mut authorized = false;
+
         if !addr_whitelist.is_empty() && !addr_whitelist.contains(&address.ip()) {
             info!("Connection from {:?} not in whitelist", address);
-            continue;
+        } else {
+            authorized = true;
         }
 
-        let mut lock = clients_list.try_lock().unwrap();
-        lock.push(VortexServer {
+        clients_list.add(VortexServer {
             id,
             address,
-            server_channel
+            server_channel,
+            authorized,
+            hostname: "".to_string(),
+            player_count: 0,
         });
 
         info!("New connection from {:?} ID: {}", socket.peer_addr(), id);
 
         // Create a new instance
-        let mut instance = Instance::new(id, maintx.clone(), socket, rx);
+        let instance = GameServer::new(id, socket, rx, clients_list.clone());
+
         tokio::spawn(async move {
             instance.main_loop().await;
         });
@@ -193,9 +142,12 @@ async fn relay_listener(clients_list: Arc<Mutex<Vec<VortexServer>>>, maintx: Sen
     }
 }
 
-async fn server_message_pump(mut mainrx: Receiver<InstanceCommand>, clients: ServerList, discord: DiscordContext) {
-    let clients = clients;
-    let discord = discord;
+async fn bus_message_pump(
+    mut bus_rx: Receiver<BusAction>,
+    clients: GameServerList,
+    discord: DiscordContext,
+) {
+    let mut clients = clients;
     let mut channel = None;
     let mut discord_http = None;
 
@@ -206,50 +158,51 @@ async fn server_message_pump(mut mainrx: Receiver<InstanceCommand>, clients: Ser
                 channel = Some(g);
             }
         }
-        
+
         discord_http = Some(http_client.clone());
     }
-    
+
     if channel.is_none() {
         info!("Provided discord channel not found");
     }
-    
+
     loop {
-        let cmd = mainrx.recv().await.unwrap();
-        
+        let cmd = bus_rx.recv().await.unwrap();
+
         trace!("Received command: {:?}", cmd);
         match cmd {
-            InstanceCommand::Relay { id, ref message } => {
-                let cl = get_server_address(&clients, id);
-                
+            BusAction::Relay {
+                sender_id: id,
+                ref message,
+            } => {
+                let cl = clients.get_server_address(id);
+
                 info!("Msg from server {} ({}): {}", id, cl, message);
-                // broadcast(&clients, InstanceCommand::Relay { id, message }, id).await;
 
-                let channels: Vec<VortexServer>;
-
-                {
-                    let lock = clients.try_lock().unwrap();
-                    channels = lock.iter().map(|x| x.clone()).collect();
-                }
+                let channels = clients.get_servers_snapshot();
 
                 debug!("Broadcasting to all servers: {:?}", channels);
+
+                // send to all other vortex servers
                 for cl in channels.iter() {
                     if cl.id == id {
                         continue;
                     }
 
-                    let newcmd = cmd.clone();
+                    let new_cmd = cmd.clone();
                     trace!("Broadcasting to server {}: {:?}", cl.id, message);
-                    cl.server_channel.send(newcmd).await.ok();
+                    cl.server_channel.send(new_cmd).await.ok();
                 }
 
+                // if it was not sent by discord, send this message to it
                 if id != DISCORD_CHANNEL {
                     if let Some(channel) = channel.as_ref() {
-                        let state = channel.send_message(
-                            &discord_http.as_ref().unwrap(),
-                            CreateMessage::new()
-                                .content(message)
-                        ).await;
+                        let state = channel
+                            .send_message(
+                                &discord_http.as_ref().unwrap(),
+                                CreateMessage::new().content(message),
+                            )
+                            .await;
 
                         if let Err(e) = state {
                             info!("Failed to send message to discord: {:?}", e);
@@ -257,17 +210,28 @@ async fn server_message_pump(mut mainrx: Receiver<InstanceCommand>, clients: Ser
                     }
                 }
             }
-            InstanceCommand::ServerOffline { id } => {
-                let cl = get_server_address(&clients, id);
+            BusAction::ServerOffline { sender_id: id } => {
+                let cl = clients.get_server_address(id);
                 info!("Server {} ({}) offline", id, cl);
 
-                {
-                    let mut lock = clients.try_lock().unwrap();
-                    lock.retain(|x| x.id != id);
-                }
+                clients.remove(id)
             }
-        }
+            BusAction::AuthorizeRequest { sender_id: id, key, hostname, player_count } => {
+                let server = clients.get_server_copy_by_id(id);
+                let result = clients.authorize(id, key);
+                if let Some(server) = server {
+                    clients.set_hostname(id, hostname);
+                    clients.set_player_count(id, player_count);
+
+                    server.server_channel
+                        .send(BusAction::AuthorizeResult { ok: result })
+                        .await
+                        .ok();
+                }
+            },
+            BusAction::AuthorizeResult { .. } => { /* this is not something _we_ must handle */ }
+        };
+
         debug!("Finished processing command");
     }
 }
-
