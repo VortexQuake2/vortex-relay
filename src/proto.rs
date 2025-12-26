@@ -10,41 +10,41 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::instance::on_game_server_message_received;
-use crate::messages::{GameServerAction, BusAction};
+use crate::messages::{GameServerAction, };
 use crate::serverlist::{GameServerList};
 
 const MAGIC: u32 = 0xC0A7BEEF;
 
-pub struct ServerMessage {
-    magic: u32,
-    size: u32,
-    server_command: BusAction
-}
-
-impl ServerMessage {
-    fn is_valid(&self) -> bool {
-        self.magic == MAGIC
-    }
-
-    fn from(bytes: &[u8]) -> Result<Self, anyhow::Error> {
-        let mut cursor = io::Cursor::new(bytes);
-        let magic = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
-        let size = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
-
-        let server_command;
-        if size as usize == bytes.len() - 8 {
-            server_command = rmp_serde::from_slice( &bytes[8..8 + (size as usize)] )?;
-        } else {
-            return Err(anyhow::anyhow!("Invalid size"));
-        }
-
-        Ok(Self {
-            magic,
-            size,
-            server_command
-        })
-    }
-}
+// pub struct ServerMessage {
+//     magic: u32,
+//     size: u32,
+//     server_command: BusAction
+// }
+//
+// impl ServerMessage {
+//     fn is_valid(&self) -> bool {
+//         self.magic == MAGIC
+//     }
+//
+//     fn from(bytes: &[u8]) -> Result<Self, anyhow::Error> {
+//         let mut cursor = io::Cursor::new(bytes);
+//         let magic = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
+//         let size = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
+//
+//         let server_command;
+//         if size as usize == bytes.len() - 8 {
+//             server_command = rmp_serde::from_slice( &bytes[8..8 + (size as usize)] )?;
+//         } else {
+//             return Err(anyhow::anyhow!("Invalid size"));
+//         }
+//
+//         Ok(Self {
+//             magic,
+//             size,
+//             server_command
+//         })
+//     }
+// }
 
 const MAX_PACKET_SIZE: usize = 16 * 1024 + 8;
 const MAX_MESSAGE_SIZE: usize = 16 * 1024;
@@ -59,7 +59,7 @@ pub struct ClientPackage {
 enum MessageParseError {
     TooSmall,
     InvalidMagic,
-    TooBig
+    // TooBig
 }
 
 impl Display for MessageParseError {
@@ -67,7 +67,7 @@ impl Display for MessageParseError {
         match self {
             MessageParseError::TooSmall => write!(f, "Invalid message size"),
             MessageParseError::InvalidMagic => write!(f, "Invalid magic number"),
-            MessageParseError::TooBig => write!(f, "Message too big")
+            // MessageParseError::TooBig => write!(f, "Message too big")
         }
     }
 }

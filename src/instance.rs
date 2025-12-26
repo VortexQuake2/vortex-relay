@@ -98,6 +98,7 @@ impl GameServer {
     }
 }
 
+// handle message sent by the game server
 pub async fn on_game_server_message_received(
     id: u32,
     game_server_list: &GameServerList,
@@ -129,15 +130,41 @@ pub async fn on_game_server_message_received(
                 return None;
             }
 
+            let count = game_server_list.change_player_count(id, 1);
+
             bus.bus_tx()
                 .send(BusAction::Relay {
                     sender_id: id,
-                    message: format!("{} joined server \"{}\"", name, server_state.hostname),
+                    message: format!(
+                        "{} joined @ {} ({} players online)",
+                        name,
+                        server_state.hostname,
+                        count.unwrap()
+                    ),
                 })
                 .await
                 .unwrap()
         }
-        GameServerAction::ClientDisconnect { .. } => {}
+        GameServerAction::ClientDisconnect { name } => {
+            if !server_state.authorized {
+                return None;
+            }
+
+            let count = game_server_list.change_player_count(id, -1);
+
+            bus.bus_tx()
+                .send(BusAction::Relay {
+                    sender_id: id,
+                    message: format!(
+                        "{} disconnected @ {} ({} players online)",
+                        name,
+                        server_state.hostname,
+                        count.unwrap()
+                    ),
+                })
+                .await
+                .unwrap()
+        }
         GameServerAction::Login { .. } => {}
         GameServerAction::Authorize { result } => {
             if server_state.authorized {

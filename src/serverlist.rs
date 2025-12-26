@@ -68,7 +68,7 @@ impl GameServerList {
         &self.bus
     }
 
-    pub(crate) fn authorize(&self, id: u32, key: String) -> bool {
+    pub fn authorize(&self, id: u32, key: String) -> bool {
         let bus = self.bus.ctx.lock().unwrap();
         server_by_id!(self, id, server {
            server.authorized = bus.authorized_keys.contains(&key);
@@ -86,10 +86,13 @@ impl GameServerList {
         None
     }
 
-    pub fn change_player_count(&self, id: u32, delta: i32) {
+    pub fn change_player_count(&self, id: u32, delta: i32) -> Option<u32> {
         server_by_id!(self, id, server {
             server.player_count = server.player_count.checked_add_signed(delta).unwrap();
+            return Some(server.player_count)
         });
+
+        None
     }
 
     pub fn set_player_count(&self, id: u32, count: u32) {
@@ -98,7 +101,7 @@ impl GameServerList {
         });
     }
 
-    pub(crate) fn set_hostname(&self, id: u32, hostname: String) -> bool {
+    pub fn set_hostname(&self, id: u32, hostname: String) -> bool {
         server_by_id!(self, id, server {
             server.hostname = hostname;
             return true;
@@ -107,13 +110,13 @@ impl GameServerList {
         false
     }
 
-    pub fn get_hostname(&self, id: u32) -> Option<String> {
-        server_by_id!(self, id, server {
-            return Some(server.hostname.clone());
-        });
-
-        None
-    }
+    // pub fn get_hostname(&self, id: u32) -> Option<String> {
+    //     server_by_id!(self, id, server {
+    //         return Some(server.hostname.clone());
+    //     });
+    //
+    //     None
+    // }
 
     pub fn add(&mut self, server: VortexServer) {
         let mut lock = self.list.lock().unwrap();
@@ -131,12 +134,12 @@ impl GameServerList {
         lock.iter().map(|x| x.clone()).collect()
     }
 
-    pub fn is_authorized(&self, id: u32) -> bool {
-        let lock = self.list.lock().unwrap();
-        lock.iter()
-            .find(|x| x.id == id)
-            .is_some_and(|x| x.authorized)
-    }
+    // pub fn is_authorized(&self, id: u32) -> bool {
+    //     let lock = self.list.lock().unwrap();
+    //     lock.iter()
+    //         .find(|x| x.id == id)
+    //         .is_some_and(|x| x.authorized)
+    // }
 
     pub fn get_server_address(&self, id: u32) -> String {
         let lock = self.list.lock().unwrap();
