@@ -136,7 +136,7 @@ pub async fn on_game_server_message_received(
                 .send(BusAction::Relay {
                     sender_id: id,
                     message: format!(
-                        "{} joined @ {} ({} players online)",
+                        "{} joined @ {} ({} player(s) online)",
                         name,
                         server_state.hostname,
                         count.unwrap()
@@ -156,7 +156,7 @@ pub async fn on_game_server_message_received(
                 .send(BusAction::Relay {
                     sender_id: id,
                     message: format!(
-                        "{} disconnected @ {} ({} players online)",
+                        "{} disconnected @ {} ({} player(s) online)",
                         name,
                         server_state.hostname,
                         count.unwrap()

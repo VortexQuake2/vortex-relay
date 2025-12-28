@@ -3,7 +3,8 @@ use std::error::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::fmt::Display;
 use std::io;
-use std::io::Write;
+use std::io::{Write};
+use anyhow::Context;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use log::{error, info, trace};
 use tokio::io::AsyncReadExt;
@@ -12,6 +13,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use crate::instance::on_game_server_message_received;
 use crate::messages::{GameServerAction, };
 use crate::serverlist::{GameServerList};
+use rhexdump::prelude::*;
 
 const MAGIC: u32 = 0xC0A7BEEF;
 
@@ -90,9 +92,10 @@ impl ClientPackage {
         let size = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
 
 
-        let client_command;
+        let client_command: GameServerAction;
         if size as usize <= bytes.len() - 8 {
-            client_command = rmp_serde::from_slice( &bytes[8..8+(size as usize)] )?;
+            let slice = &bytes[8..8 + size as usize];
+            client_command = rmp_serde::from_slice(slice)?;
         } else {
             return Err(MessageParseError::TooSmall.into());
         }
@@ -161,7 +164,8 @@ pub async fn game_socket_send_receive_all(
                     pending_buffer.clear();
                     while start < full_buffer.len() {
                         let data = &full_buffer[start..];
-                        let message = ClientPackage::from_bytes(data);
+                        let message = ClientPackage::from_bytes(data)
+                            .with_context(|| rhexdumps!(data));
                         if message.is_err() {
                             if let Some(e) = message.err() {
                                 if let Some(e2) = e.downcast_ref::<MessageParseError>() {
@@ -171,7 +175,7 @@ pub async fn game_socket_send_receive_all(
                                     }
                                 }
 
-                                 error!("failed to parse message; err = {:?}", e);
+                                error!("failed to parse message; err = {:?}", e);
                             }
 
                             return Ok(false);

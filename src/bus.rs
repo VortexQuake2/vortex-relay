@@ -27,7 +27,7 @@ impl Bus {
             discord_chan: channel,
             discord_http,
             clients,
-        }   
+        }
     }
 
     pub async fn bus_message_pump(&mut self) {
@@ -87,7 +87,7 @@ impl Bus {
         debug!("Broadcasting to all servers: {:?}", channels);
 
         for cl in channels.iter() {
-            if cl.id == sender_id {
+            if cl.id == sender_id || !cl.authorized{
                 continue;
             }
 
