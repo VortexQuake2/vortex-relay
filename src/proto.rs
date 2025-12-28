@@ -222,8 +222,9 @@ pub struct GameServerSender<'a>(pub &'a Sender<Vec<u8>>);
 
 impl<'a> GameServerSender<'a> {
     pub async fn send_command(&self, command: GameServerAction) {
-       self.0.send(
-           ClientPackage::from(command).into()
-       ).await.unwrap()
+        let message: Vec<u8> = ClientPackage::from(command).into();
+        if let Err(e) = self.0.send(message).await {
+            error!("Failed to send game server command: {}", e);
+        }
     }
 }

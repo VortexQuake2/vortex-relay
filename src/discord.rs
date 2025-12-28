@@ -50,8 +50,21 @@ pub async fn make_discord_bot(bus_tx: &Sender<BusAction>) -> Option<(JoinHandle<
         let receive_channels_str = env::var("DISCORD_RECEIVE_CHANNELS")
             .unwrap_or("".to_string());
         let receive_channels: Vec<u64> = receive_channels_str
-            .split(",")
-            .map(|x| x.parse().unwrap()).collect();
+            .split(',')
+            .filter_map(|x| {
+                let trimmed = x.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        log::warn!("Invalid Discord channel ID '{}': {}", trimmed, e);
+                        None
+                    }
+                }
+            })
+            .collect();
         let client = Client::builder(&token,
                                      GatewayIntents::GUILD_MESSAGES |
                                          GatewayIntents::MESSAGE_CONTENT)

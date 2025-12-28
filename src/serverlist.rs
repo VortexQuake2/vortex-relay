@@ -88,7 +88,7 @@ impl GameServerList {
 
     pub fn change_player_count(&self, id: u32, delta: i32) -> Option<u32> {
         server_by_id!(self, id, server {
-            server.player_count = server.player_count.checked_add_signed(delta).unwrap();
+            server.player_count = server.player_count.saturating_add_signed(delta);
             return Some(server.player_count)
         });
 
@@ -118,12 +118,12 @@ impl GameServerList {
     //     None
     // }
 
-    pub fn add(&mut self, server: VortexServer) {
+    pub fn add(&self, server: VortexServer) {
         let mut lock = self.list.lock().unwrap();
         lock.push(server)
     }
 
-    pub fn remove(&mut self, id: u32) {
+    pub fn remove(&self, id: u32) {
         let mut lock = self.list.lock().unwrap();
         lock.retain(|x| x.id != id);
     }

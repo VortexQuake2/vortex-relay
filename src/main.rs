@@ -39,7 +39,7 @@ async fn main() -> io::Result<()> {
 
     let rust_log = env::var("RUST_LOG").unwrap_or("".to_string());
 
-    if rust_log == "" {
+    if rust_log.is_empty() {
         println!("RUST_LOG is unset, setting to sane defaults");
         env::set_var("RUST_LOG", "off,vrxbridge=info");
     }

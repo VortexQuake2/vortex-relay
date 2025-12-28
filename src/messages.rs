@@ -32,9 +32,9 @@ pub enum GameServerAction {
     Authorize { result: AuthorizeClientMessage },
 }
 
-impl Into<Vec<u8>> for GameServerAction {
-    fn into(self) -> Vec<u8> {
-        rmp_serde::to_vec(&self).unwrap()
+impl From<GameServerAction> for Vec<u8> {
+    fn from(value: GameServerAction) -> Vec<u8> {
+        rmp_serde::to_vec(&value).unwrap()
     }
 }
 

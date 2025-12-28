@@ -87,7 +87,7 @@ impl Bus {
         debug!("Broadcasting to all servers: {:?}", channels);
 
         for cl in channels.iter() {
-            if cl.id == sender_id || !cl.authorized{
+            if cl.id == sender_id || !cl.authorized {
                 continue;
             }
 
