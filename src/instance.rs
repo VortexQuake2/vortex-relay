@@ -185,6 +185,25 @@ pub async fn on_game_server_message_received(
                 },
                 _ => {}
             }
+        },
+        GameServerAction::SpawnEntities { mapname } => {
+            if !server_state.authorized {
+                return None
+            }
+
+            game_server_list.set_player_count(id, 0);
+
+            bus.bus_tx()
+                .send(BusAction::Relay {
+                    sender_id: id,
+                    message: format!(
+                        "Map changed at {}: {}",
+                        server_state.hostname,
+                        mapname
+                    ),
+                })
+                .await
+                .unwrap()
         }
     }
 
