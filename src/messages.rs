@@ -25,6 +25,9 @@ pub enum GameServerAction {
     // client disconnects from the game
     ClientDisconnect { name: String },
 
+    // map loaded
+    SpawnEntities { mapname: String },
+
     // notification that client logs into their player character
     Login { name: String },
 
