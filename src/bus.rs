@@ -36,7 +36,20 @@ impl Bus {
         }
 
         loop {
-            let cmd = self.bus_rx.recv().await.unwrap();
+            let cmd = self.bus_rx.recv().await;
+
+            if cmd.is_none() {
+                info!("Bus message pump was none?");
+
+                if self.bus_rx.is_closed() {
+                    info!("Bus message pump was closed");
+                    return;
+                }
+
+                continue;
+            }
+
+            let cmd = cmd.unwrap();
 
             trace!("Received command: {:?}", cmd);
             match cmd {

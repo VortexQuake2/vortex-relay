@@ -43,7 +43,7 @@ impl EventHandler for VrxDiscordHandler {
 }
 
 
-pub async fn make_discord_bot(bus_tx: &Sender<BusAction>) -> Option<(JoinHandle<()>, Arc<Http>)> {
+pub async fn make_discord_bot(bus_tx: Sender<BusAction>) -> Option<(JoinHandle<()>, Arc<Http>)> {
     let token = env::var("DISCORD_TOKEN").ok();
 
     if let Some(token) = token {
@@ -69,7 +69,7 @@ pub async fn make_discord_bot(bus_tx: &Sender<BusAction>) -> Option<(JoinHandle<
                                      GatewayIntents::GUILD_MESSAGES |
                                          GatewayIntents::MESSAGE_CONTENT)
             .event_handler(VrxDiscordHandler {
-                transmitter: bus_tx.clone(),
+                transmitter: bus_tx,
                 receive_channels
             })
             .await

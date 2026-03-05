@@ -68,7 +68,8 @@ async fn main() -> io::Result<()> {
         .parse()
         .ok();
 
-    let discord_bot = make_discord_bot(&bus_tx).await;
+    let discord_bot_tx = bus_tx.clone();
+    let discord_bot = make_discord_bot(discord_bot_tx).await;
     let mut task_discord = None;
     let mut discord_http = None;
 
