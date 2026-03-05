@@ -57,22 +57,45 @@ impl Bus {
                     }
                 }
                 BusAction::ServerOffline { sender_id: id } => {
-                    let cl = self.clients.get_server_address(id);
-                    info!("Server {} ({}) offline", id, cl);
+                    let server = self.clients.get_server_copy_by_id(id);
+                    if server.is_none() {
+                        return;
+                    }
 
-                    self.clients.remove(id)
+                    let server = server.unwrap();
+                    info!("Server {} ({}) offline", id, server.address);
+
+                    self.clients.remove(id);
+
+                    let message = format!("Server \"{}\" ({}) offline", server.hostname, server.address);
+
+                    self.game_server_sendall(BusAction::Relay {
+                        sender_id: id,
+                        message: message.clone()
+                    }, id, &message).await;
+
+                    self.discord_send(&message).await;
                 }
                 BusAction::AuthorizeRequest { sender_id: id, key, hostname, player_count } => {
                     let server = self.clients.get_server_copy_by_id(id);
                     let result = self.clients.authorize(id, key);
                     if let Some(server) = server {
-                        self.clients.set_hostname(id, hostname);
+                        self.clients.set_hostname(id, hostname.clone());
                         self.clients.set_player_count(id, player_count);
 
                         server.server_channel
                             .send(BusAction::AuthorizeResult { ok: result })
                             .await
                             .ok();
+
+                        let message = format!("Server \"{}\" ({}) online", hostname, server.address);
+
+                        self.game_server_sendall(BusAction::Relay {
+                            sender_id: id,
+                            message: message.clone()
+                        }, id, &message).await;
+
+                        self.discord_send(&message).await;
                     }
                 },
                 BusAction::AuthorizeResult { .. } => { /* this is not something _we_ must handle */ }

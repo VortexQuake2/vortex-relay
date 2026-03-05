@@ -12,7 +12,6 @@ use crate::serverlist::{BusContext, GameServerList, SharedBusContext, VortexServ
 use colog;
 use log::{info};
 use std::env;
-use std::net::IpAddr;
 use tokio::io::{self};
 use tokio::net::TcpListener;
 use crate::bus::{Bus, DiscordContext};
