@@ -63,9 +63,13 @@ impl Bus {
                     }
 
                     let server = server.unwrap();
-                    info!("Server {} ({}) offline", id, server.address);
 
+                    info!("Server {} ({}) offline", id, server.address);
                     self.clients.remove(id);
+
+                    if !server.authorized {
+                        return;
+                    }
 
                     let message = format!("Server \"{}\" ({}) offline", server.hostname, server.address);
 
