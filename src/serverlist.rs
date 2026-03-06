@@ -38,6 +38,10 @@ impl SharedBusContext {
     pub fn bus_tx(&self) -> &Sender<BusAction> {
         &self.bus_tx
     }
+
+    pub async fn send(&self, bus_action: BusAction) -> Result<(), tokio::sync::mpsc::error::SendError<BusAction>>{
+        self.bus_tx.send(bus_action).await
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +70,10 @@ impl GameServerList {
 
     pub fn bus(&self) -> &SharedBusContext {
         &self.bus
+    }
+
+    pub async fn send(&self, action: BusAction) -> Result<(), tokio::sync::mpsc::error::SendError<BusAction>> {
+        self.bus.send(action).await
     }
 
     pub fn authorize(&self, id: u32, key: String) -> bool {

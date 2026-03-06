@@ -5,6 +5,7 @@ mod messages;
 mod proto;
 mod serverlist;
 mod bus;
+mod instancehandlers;
 
 use crate::discord::{make_discord_bot};
 use crate::instance::GameServer;

@@ -41,6 +41,15 @@ impl From<GameServerAction> for Vec<u8> {
     }
 }
 
+impl GameServerAction {
+    pub fn requires_authorization(&self) -> bool {
+        match self {
+            GameServerAction::Authorize { .. } => false,
+            _ => true,
+        }
+    }
+}
+
 // internal IPC message
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub enum BusAction {
