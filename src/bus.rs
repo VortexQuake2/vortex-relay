@@ -72,7 +72,7 @@ impl Bus {
                 BusAction::ServerOffline { sender_id: id } => {
                     let server = self.clients.get_server_copy_by_id(id);
                     if server.is_none() {
-                        return;
+                        continue;
                     }
 
                     let server = server.unwrap();
@@ -81,7 +81,7 @@ impl Bus {
                     self.clients.remove(id);
 
                     if !server.authorized {
-                        return;
+                        continue;
                     }
 
                     let message = format!("Server \"{}\" ({}) offline", server.hostname, server.address);
