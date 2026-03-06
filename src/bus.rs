@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use log::{debug, info, trace};
-use serenity::all::{ChannelId, CreateMessage, GuildChannel, Http};
-use serenity::all::Channel::Guild;
-use tokio::sync::mpsc::Receiver;
 use crate::discord::DISCORD_CHANNEL;
 use crate::instance::BusAction;
-use crate::serverlist::{GameServerList};
+use crate::serverlist::GameServerList;
+use log::{debug, info, trace};
+use serenity::all::Channel::Guild;
+use serenity::all::{ChannelId, CreateMessage, GuildChannel, Http};
+use std::sync::Arc;
+use tokio::sync::mpsc::Receiver;
 
 pub struct DiscordContext {
     pub(crate) http: Option<Arc<Http>>,
@@ -20,7 +20,11 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub async fn new(discord: DiscordContext, bus_rx: Receiver<BusAction>, clients: GameServerList) -> Self {
+    pub async fn new(
+        discord: DiscordContext,
+        bus_rx: Receiver<BusAction>,
+        clients: GameServerList,
+    ) -> Self {
         let (channel, discord_http) = get_discord_chan(discord).await;
         Bus {
             bus_rx,
@@ -56,69 +60,105 @@ impl Bus {
                 BusAction::Relay {
                     sender_id: id,
                     ref message,
+                } => self.handle_relay(cmd.clone(), id, message).await,
+                BusAction::ServerOffline { sender_id: id } => self.handle_server_offline(id).await,
+                BusAction::AuthorizeRequest {
+                    sender_id: id,
+                    key,
+                    hostname,
+                    player_count,
                 } => {
-                    let cl = self.clients.get_server_address(id);
-
-                    info!("Msg from server {} ({}): {}", id, cl, message);
-
-                    // send to all other vortex servers
-                    self.game_server_sendall(cmd.clone(), id, message).await;
-
-                    // if it was not sent by discord, send this message to it
-                    if id != DISCORD_CHANNEL {
-                        self.discord_send(message).await;
-                    }
+                    self.handle_auth_request(id, key, hostname, player_count)
+                        .await
                 }
-                BusAction::ServerOffline { sender_id: id } => {
-                    let server = self.clients.get_server_copy_by_id(id);
-                    if server.is_none() {
-                        continue;
-                    }
-
-                    let server = server.unwrap();
-
-                    info!("Server {} ({}) offline", id, server.address);
-                    self.clients.remove(id);
-
-                    if !server.authorized {
-                        continue;
-                    }
-
-                    let message = format!("Server \"{}\" ({}) offline", server.hostname, server.address);
-
-                    self.game_server_sendall(BusAction::Relay {
-                        sender_id: id,
-                        message: message.clone()
-                    }, id, &message).await;
-
-                    self.discord_send(&message).await;
+                BusAction::AuthorizeResult { .. } => {
+                    /* this is not something _we_ must handle */
                 }
-                BusAction::AuthorizeRequest { sender_id: id, key, hostname, player_count } => {
-                    let server = self.clients.get_server_copy_by_id(id);
-                    let result = self.clients.authorize(id, key);
-                    if let Some(server) = server {
-                        self.clients.set_hostname(id, hostname.clone());
-                        self.clients.set_player_count(id, player_count);
-
-                        server.server_channel
-                            .send(BusAction::AuthorizeResult { ok: result })
-                            .await
-                            .ok();
-
-                        let message = format!("Server \"{}\" ({}) online", hostname, server.address);
-
-                        self.game_server_sendall(BusAction::Relay {
-                            sender_id: id,
-                            message: message.clone()
-                        }, id, &message).await;
-
-                        self.discord_send(&message).await;
-                    }
-                },
-                BusAction::AuthorizeResult { .. } => { /* this is not something _we_ must handle */ }
             };
 
             debug!("Finished processing command");
+        }
+    }
+
+    async fn handle_auth_request(
+        &mut self,
+        id: u32,
+        key: String,
+        hostname: String,
+        player_count: u32,
+    ) {
+        let server = self.clients.get_server_copy_by_id(id);
+        let result = self.clients.authorize(id, key);
+        if let Some(server) = server {
+            self.clients.set_hostname(id, hostname.clone());
+            self.clients.set_player_count(id, player_count);
+
+            server
+                .server_channel
+                .send(BusAction::AuthorizeResult { ok: result })
+                .await
+                .ok();
+
+            let message = format!("Server \"{}\" ({}) online", hostname, server.address);
+
+            self.game_server_sendall(
+                BusAction::Relay {
+                    sender_id: id,
+                    message: message.clone(),
+                },
+                id,
+                &message,
+            )
+            .await;
+
+            self.discord_send(&message).await;
+        }
+    }
+
+    async fn handle_server_offline(&mut self, id: u32) {
+        let server = self.clients.get_server_copy_by_id(id);
+        if server.is_none() {
+            return;
+        }
+
+        let server = server.unwrap();
+
+        info!("Server {} ({}) offline", id, server.address);
+        self.clients.remove(id);
+
+        if !server.authorized {
+            return;
+        }
+
+        let message = format!(
+            "Server \"{}\" ({}) offline",
+            server.hostname, server.address
+        );
+
+        self.game_server_sendall(
+            BusAction::Relay {
+                sender_id: id,
+                message: message.clone(),
+            },
+            id,
+            &message,
+        )
+        .await;
+
+        self.discord_send(&message).await;
+    }
+
+    async fn handle_relay(&mut self, cmd: BusAction, id: u32, message: &String) {
+        let cl = self.clients.get_server_address(id);
+
+        info!("Msg from server {} ({}): {}", id, cl, message);
+
+        // send to all other vortex servers
+        self.game_server_sendall(cmd.clone(), id, message).await;
+
+        // if it was not sent by discord, send this message to it
+        if id != DISCORD_CHANNEL {
+            self.discord_send(message).await;
         }
     }
 
@@ -154,10 +194,6 @@ impl Bus {
         }
     }
 }
-
-
-
-
 
 async fn get_discord_chan(discord: DiscordContext) -> (Option<GuildChannel>, Option<Arc<Http>>) {
     let mut channel = None;
