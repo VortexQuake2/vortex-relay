@@ -1,3 +1,4 @@
+use crate::models::{Item, Skills};
 use anyhow::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::SendError;
@@ -45,7 +46,20 @@ impl GameMessageReceivedHandler {
             GameServerAction::ClientDisconnect { name } => {
                 self.handle_game_disconnect(name).await?
             }
-            GameServerAction::Login { .. } => {}
+            GameServerAction::Login { name } => self.handle_game_login(name).await?,
+            GameServerAction::Load { name, password, connection_id, .. } => self.handle_game_load(name, password, connection_id).await?,
+            GameServerAction::Save { name, connection_id, skills } => self.handle_game_save(name, connection_id, skills).await?,
+            GameServerAction::SaveAndClose { name, connection_id, skills } => self.handle_game_save_and_close(name, connection_id, skills).await?,
+            GameServerAction::StashPage { name, page, connection_id, .. } => self.handle_game_stash_page(name, page, connection_id).await?,
+            GameServerAction::StashTake { name, page, index, connection_id, .. } => self.handle_game_stash_take(name, page, index, connection_id).await?,
+            GameServerAction::StashStore { name, page, index, item, connection_id, .. } => self.handle_game_stash_put(name, page, index, item, connection_id).await?,
+            GameServerAction::StashOpen { name, connection_id } => self.handle_game_stash_open(name, connection_id).await?,
+            GameServerAction::StashOpenResult { .. } => {
+                anyhow::bail!("StashOpenResult is a relay to server message");
+            }
+            GameServerAction::StashClose { name, connection_id } => self.handle_game_stash_close(name, connection_id).await?,
+            GameServerAction::StashCloseById { name, id, connection_id, .. } => self.handle_game_stash_close_by_id(name, id, connection_id).await?,
+            GameServerAction::SetOwner { name, password, reset, owner, connection_id, .. } => self.handle_game_set_owner(name, password, reset, owner, connection_id).await?,
             GameServerAction::Authorize { result } => self.handle_game_authorize(result).await?,
             GameServerAction::SpawnEntities { mapname } => {
                 self.handle_game_spawnentities(mapname).await?
@@ -112,6 +126,123 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
+    async fn handle_game_login(&self, name: String) -> Result<(), Error> {
+        if self.peers.lock_character(name.clone(), self.id) {
+            self.send(BusAction::Load {
+                sender_id: self.id,
+                name,
+                password: "".to_string(),
+                connection_id: 0,
+            }).await?;
+        } else {
+            // maybe notify that character is already logged in?
+        }
+        Ok(())
+    }
+
+    async fn handle_game_load(&self, name: String, password: String, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::Load {
+            sender_id: self.id,
+            name,
+            password,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_save(&self, name: String, connection_id: i32, skills: Skills) -> Result<(), Error> {
+        self.send(BusAction::Save {
+            sender_id: self.id,
+            name,
+            connection_id,
+            skills,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_save_and_close(&self, name: String, connection_id: i32, skills: Skills) -> Result<(), Error> {
+        self.send(BusAction::SaveAndClose {
+            sender_id: self.id,
+            name,
+            connection_id,
+            skills,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_page(&self, name: String, page: i32, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashPage {
+            sender_id: self.id,
+            name,
+            page,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_take(&self, name: String, page: i32, index: i32, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashTake {
+            sender_id: self.id,
+            name,
+            page,
+            index,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_put(&self, name: String, page: i32, index: i32, item: Item, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashStore {
+            sender_id: self.id,
+            name,
+            page,
+            index,
+            item,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_open(&self, name: String, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashOpen {
+            sender_id: self.id,
+            name,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_close(&self, name: String, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashClose {
+            sender_id: self.id,
+            name,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_stash_close_by_id(&self, name: String, id: i32, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::StashCloseById {
+            sender_id: self.id,
+            name,
+            id,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
+    async fn handle_game_set_owner(&self, name: String, password: String, reset: bool, owner: String, connection_id: i32) -> Result<(), Error> {
+        self.send(BusAction::SetOwner {
+            sender_id: self.id,
+            name,
+            password,
+            reset,
+            owner,
+            connection_id,
+        }).await?;
+        Ok(())
+    }
+
     async fn handle_game_authorize(&self, result: AuthorizeClientMessage) -> Result<(), Error> {
         if self.server_state().authorized {
             return Ok(());
@@ -167,6 +298,11 @@ impl GameServerBusCommandHandler<'_> {
         match command {
             BusAction::Relay { message, .. } => self.handle_bus_relay(message).await?,
             BusAction::AuthorizeResult { ok } => self.handle_bus_authorize(ok).await?,
+            BusAction::LoadResult { name, connection_id, skills } => self.handle_bus_load(name, connection_id, skills).await?,
+            BusAction::StashPageResult { name, page, items, connection_id } => self.handle_bus_stash_page(name, page, items, connection_id).await?,
+            BusAction::StashTakeResult { name, page, index, success, item, connection_id } => self.handle_bus_stash_take(name, page, index, success, item, connection_id).await?,
+            BusAction::StashStoreResult { name, page, index, success, connection_id } => self.handle_bus_stash_put(name, page, index, success, connection_id).await?,
+            BusAction::StashOpenResult { name, items, connection_id } => self.handle_bus_stash_open_result(name, items, connection_id).await?,
             _ => {}
         }
 
@@ -191,5 +327,34 @@ impl GameServerBusCommandHandler<'_> {
         // relay the message to the client
         let message = message.chars().filter(|x| x.is_ascii()).collect::<String>();
         self.send_command(GameServerAction::Relay { message }).await
+    }
+
+    async fn handle_bus_load(&mut self, name: String, connection_id: i32, skills: Option<Skills>) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(GameServerAction::Load {
+            name,
+            password: "".to_string(), // not used in response
+            connection_id,
+            skills,
+        }).await
+    }
+
+    async fn handle_bus_stash_page(&mut self, name: String, page: i32, items: Vec<Option<Item>>, connection_id: i32) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(GameServerAction::StashPage { name, page, items, connection_id }).await
+    }
+
+    async fn handle_bus_stash_take(&mut self, name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: i32) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(GameServerAction::StashTake { name, page, index, success, item, connection_id }).await
+    }
+
+    async fn handle_bus_stash_put(&mut self, name: String, page: i32, index: i32, success: bool, connection_id: i32) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(GameServerAction::StashStore { name, page, index, success, connection_id, item: Item {
+            item_type: 0, item_level: 0, quantity: 0, untradeable: 0, id: "".to_string(), name: "".to_string(),
+            num_mods: 0, set_code: 0, class_num: 0, modifiers: [crate::models::IModifier { modifier_type: 0, index: 0, value: 0, set: 0 }; 6],
+            is_unique: 0
+        } }).await
+    }
+
+    async fn handle_bus_stash_open_result(&mut self, name: String, items: Vec<Option<Item>>, connection_id: i32) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(GameServerAction::StashOpenResult { name, connection_id, items }).await
     }
 }

@@ -1,4 +1,5 @@
 mod character;
+mod models;
 mod discord;
 mod instance;
 mod messages;
@@ -11,11 +12,13 @@ use crate::discord::{make_discord_bot};
 use crate::instance::GameServer;
 use crate::serverlist::{BusContext, GameServerList, SharedBusContext, VortexServer};
 use colog;
-use log::{info};
+use log::{info, warn};
 use std::env;
 use tokio::io::{self};
 use tokio::net::TcpListener;
 use crate::bus::{Bus, DiscordContext};
+use crate::character::CharacterManager;
+use sqlx::postgres::PgPoolOptions;
 
 //              GameServerAction             BusAction
 //
@@ -45,6 +48,25 @@ async fn main() -> io::Result<()> {
     }
 
     colog::init();
+
+    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool_res = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await;
+
+    let pool = match pool_res {
+        Ok(pool) => Some(pool),
+        Err(e) => {
+            warn!("Failed to connect to Postgres: {}. Continuing without database support.", e);
+            None
+        }
+    };
+
+    let character_manager = CharacterManager::new(pool);
+    if let Err(e) = character_manager.create_tables().await {
+        warn!("Failed to create tables: {}. Continuing without database support.", e);
+    }
 
     info!("package name: {}", env!("CARGO_PKG_NAME"));
     info!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -87,7 +109,7 @@ async fn main() -> io::Result<()> {
     let mut bus = Bus::new(DiscordContext {
         http: discord_http,
         send_channel
-    }, bus_rx, clients).await;
+    }, bus_rx, clients, character_manager).await;
     let task_bus = tokio::spawn(async move {
         bus.bus_message_pump().await;
     });

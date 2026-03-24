@@ -1,4 +1,5 @@
 use crate::messages::BusAction;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Sender;
@@ -47,6 +48,8 @@ impl SharedBusContext {
 #[derive(Debug, Clone)]
 pub struct GameServerList {
     list: Arc<Mutex<Vec<VortexServer>>>,
+    locked_characters: Arc<Mutex<HashMap<String, u32>>>,
+    locked_stashes: Arc<Mutex<HashMap<String, u32>>>,
     bus: SharedBusContext,
 }
 
@@ -64,7 +67,48 @@ impl GameServerList {
     pub fn new(bus: &SharedBusContext) -> GameServerList {
         GameServerList {
             list: Arc::new(Mutex::new(Vec::new())),
+            locked_characters: Arc::new(Mutex::new(HashMap::new())),
+            locked_stashes: Arc::new(Mutex::new(HashMap::new())),
             bus: bus.clone(),
+        }
+    }
+
+    pub fn lock_stash(&self, owner_name: String, server_id: u32) -> bool {
+        let mut lock = self.locked_stashes.lock().unwrap();
+        if lock.get(&owner_name).is_some_and(|&id| id != server_id) {
+            return false;
+        }
+        lock.insert(owner_name, server_id);
+        true
+    }
+
+    pub fn unlock_stash(&self, owner_name: &str) {
+        let mut lock = self.locked_stashes.lock().unwrap();
+        lock.remove(owner_name);
+    }
+
+    pub fn lock_character(&self, name: String, server_id: u32) -> bool {
+        let mut lock = self.locked_characters.lock().unwrap();
+        if lock.contains_key(&name) {
+            return false;
+        }
+        lock.insert(name, server_id);
+        true
+    }
+
+    pub fn unlock_character(&self, name: &str) {
+        let mut lock = self.locked_characters.lock().unwrap();
+        lock.remove(name);
+    }
+
+    pub fn unlock_all_from_server(&self, server_id: u32) {
+        {
+            let mut lock = self.locked_characters.lock().unwrap();
+            lock.retain(|_, id| *id != server_id);
+        }
+        {
+            let mut lock = self.locked_stashes.lock().unwrap();
+            lock.retain(|_, id| *id != server_id);
         }
     }
 
