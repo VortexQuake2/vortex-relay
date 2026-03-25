@@ -126,7 +126,7 @@ impl std::fmt::Debug for BigUpgradeArray {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Skills {
+pub struct Progression {
     pub experience: i64,
     pub next_level: i64,
     pub administrator: i32,
@@ -135,25 +135,27 @@ pub struct Skills {
     pub weapon_points: i32,
     pub respawn_weapon: i32,
 
-    pub frags: u32,
-    pub fragged: u32,
-    pub credits: u32,
-    pub weapon_respawns: u32,
-
     pub class_num: i32,
     pub boss: i32,
-    pub streak: i32,
 
     pub current_health: i32,
     pub max_health: i32,
     pub current_armor: i32,
     pub max_armor: i32,
+    pub credits: u32,
+    pub weapon_respawns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stats {
+    pub max_streak: i32,
+    pub frags: u32,
+    pub fragged: u32,
 
     pub shots: u64,
     pub shots_hit: u64,
 
     pub num_sprees: u32,
-    pub max_streak: i32,
     pub suicides: i32,
     pub teleports: i32,
     pub spree_wars: i32,
@@ -171,6 +173,13 @@ pub struct Skills {
 
     pub playingtime: i32,
     pub total_playtime: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Skills {
+    pub progression: Progression,
+
+    pub stats: Stats,
 
     pub inventory: BigI32Array,
 
@@ -183,7 +192,7 @@ pub struct Skills {
     pub title: String,
 
     pub nerfme: i32,
-    pub connection_id: i32,
+    pub connection_id: u64,
 
     pub items: [Item; MAX_VRXITEMS],
     pub weapons: [Weapon; MAX_WEAPONS],

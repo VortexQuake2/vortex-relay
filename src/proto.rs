@@ -160,7 +160,7 @@ impl ProtocolHandler {
             game_server_id,
             action_handler: GameMessageReceivedHandler::new(game_server_id, game_server_list),
             recv_buffer: vec![0; MAX_PACKET_SIZE],
-            pending_buffer: vec![0; MAX_PACKET_SIZE],
+            pending_buffer: Vec::new()
         }
     }
 

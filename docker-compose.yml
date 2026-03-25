@@ -1,0 +1,26 @@
+include:
+  - docker-compose.db.yml
+
+services:
+  app:
+    build: .
+    restart: always
+    ports:
+      - "9999:9999"
+      - "1234:1234"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    # To start debugging:
+    # Set DEBUG=true in the environment (e.g., via command line: DEBUG=true docker-compose up)
+    # Then on your host (MacOS): lldb -o "gdb-remote localhost:1234"
+    environment:
+      - DEBUG=${DEBUG:-false}
+      - DATABASE_URL=postgres://vortex:password@db:5432/vortex_relay
+      - RUST_LOG=off,vrxbridge=info
+      - SERVER_KEYS=default_key
+      - PORT=9999
+    depends_on:
+      db:
+        condition: service_healthy

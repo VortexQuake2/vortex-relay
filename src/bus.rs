@@ -7,6 +7,8 @@ use serenity::all::Channel::Guild;
 use serenity::all::{ChannelId, CreateMessage, GuildChannel, Http};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
+use crate::messages::LoadStatus;
+use anyhow::Result;
 
 pub struct DiscordContext {
     pub(crate) http: Option<Arc<Http>>,
@@ -60,7 +62,7 @@ impl Bus {
             let cmd = cmd.unwrap();
 
             trace!("Received command: {:?}", cmd);
-            match cmd {
+            let res = match cmd {
                 BusAction::Relay {
                     sender_id: id,
                     ref message,
@@ -87,8 +89,13 @@ impl Bus {
                 }
                 BusAction::AuthorizeResult { .. } | BusAction::LoadResult { .. } | BusAction::StashPageResult { .. } | BusAction::StashTakeResult { .. } | BusAction::StashStoreResult { .. } | BusAction::StashOpenResult { .. } => {
                     /* this is not something _we_ must handle */
+                    Ok(())
                 }
             };
+
+            if let Err(e) = res {
+                error!("Error handling bus message: {:?}", e);
+            }
 
             debug!("Finished processing command");
         }
@@ -100,7 +107,7 @@ impl Bus {
         key: String,
         hostname: String,
         player_count: u32,
-    ) {
+    ) -> Result<()> {
         let server = self.clients.get_server_copy_by_id(id);
         let result = self.clients.authorize(id, key);
         if let Some(server) = server {
@@ -110,8 +117,7 @@ impl Bus {
             server
                 .server_channel
                 .send(BusAction::AuthorizeResult { ok: result })
-                .await
-                .ok();
+                .await?;
 
             let message = format!("Server \"{}\" ({}) online", hostname, server.address);
 
@@ -127,12 +133,14 @@ impl Bus {
 
             self.discord_send(&message).await;
         }
+
+        Ok(())
     }
 
-    async fn handle_server_offline(&mut self, id: u32) {
+    async fn handle_server_offline(&mut self, id: u32) -> Result<()> {
         let server = self.clients.get_server_copy_by_id(id);
         if server.is_none() {
-            return;
+            return Ok(());
         }
 
         let server = server.unwrap();
@@ -145,7 +153,7 @@ impl Bus {
         self.clients.remove(id);
 
         if !server.authorized {
-            return;
+            return Ok(());
         }
 
         let message = format!(
@@ -164,53 +172,81 @@ impl Bus {
         .await;
 
         self.discord_send(&message).await;
+
+        Ok(())
     }
 
-    async fn handle_load(&mut self, sender_id: u32, name: String, password: String, connection_id: i32) {
-        let skills = self.character_manager.load_character(&name).await.unwrap_or_else(|e| {
+    async fn handle_load(&mut self, sender_id: u32, name: String, password: String, connection_id: u64) -> Result<()> {
+        let skills = self.character_manager.load_character(&name).await;
+        let server = self.clients.get_server_copy_by_id(sender_id);
+
+        if let Err(e) = skills {
+            self.clients.unlock_character(&name);
             error!("Failed to load character {}: {:?}", name, e);
-            None
-        });
+
+            if let Some(server) = server {
+                server.server_channel.send(BusAction::LoadResult {
+                        status: LoadStatus::InternalError,
+                        connection_id,
+                        skills: None,
+                    }).await?;
+            }
+
+            return Err(e);
+        }
+
+        let mut status = None;
+        let skills = skills.ok().flatten();
 
         let skills = if let Some(mut s) = skills {
             if s.password != password {
-                debug!("Character {} load failed: password mismatch", name);
+                status = Some(LoadStatus::WrongPassword);
                 None
             } else {
                 s.connection_id = connection_id;
                 Some(s)
             }
         } else {
+            status = Some(LoadStatus::CharacterNotFound);
             None
         };
 
-        if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
+        if let Some(server) = server {
             server.server_channel.send(BusAction::LoadResult {
-                name,
+                status: status.unwrap_or(LoadStatus::Ok),
                 connection_id,
                 skills,
-            }).await.ok();
+            }).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_save(&mut self, _sender_id: u32, name: String, connection_id: i32, mut skills: crate::models::Skills) {
+    async fn handle_save(&mut self, _sender_id: u32, name: String, connection_id: u64, mut skills: crate::models::Skills) -> Result<()> {
         skills.connection_id = connection_id;
         if let Err(e) = self.character_manager.save_character(&skills).await {
             error!("Failed to save character {}: {:?}", name, e);
+            return Err(e);
         }
+        Ok(())
     }
 
-    async fn handle_save_and_close(&mut self, sender_id: u32, name: String, connection_id: i32, skills: crate::models::Skills) {
-        self.handle_save(sender_id, name.clone(), connection_id, skills).await;
+    async fn handle_save_and_close(&mut self, sender_id: u32, name: String, connection_id: u64, skills: crate::models::Skills) -> Result<()> {
+        self.handle_save(sender_id, name.clone(), connection_id, skills).await?;
         self.clients.unlock_character(&name);
+        Ok(())
     }
 
-    async fn handle_stash_page(&mut self, sender_id: u32, name: String, page: i32, connection_id: i32) {
+    async fn handle_stash_page(&mut self, sender_id: u32, name: String, page: i32, connection_id: u64) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
-        let items = self.character_manager.get_stash_page(&owner, page).await.unwrap_or_else(|e| {
+        let items = self.character_manager.get_stash_page(&owner, page).await;
+
+        if let Err(e) = items {
             error!("Failed to load stash page for {} (owner {}): {:?}", name, owner, e);
-            vec![None; 64]
-        });
+            return Err(e);
+        }
+
+        let items = items.unwrap_or_else(|_| vec![None; 64]);
 
         if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
             server.server_channel.send(BusAction::StashPageResult {
@@ -218,21 +254,30 @@ impl Bus {
                 page,
                 items,
                 connection_id,
-            }).await.ok();
+            }).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_stash_take(&mut self, sender_id: u32, name: String, page: i32, index: i32, connection_id: i32) {
+    async fn handle_stash_take(&mut self, sender_id: u32, name: String, page: i32, index: i32, connection_id: u64) -> Result<()> {
         let mut success = false;
         let mut item = None;
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
 
         if self.clients.lock_stash(owner.clone(), sender_id) {
-            item = self.character_manager.take_stash_item(&owner, page, index).await.unwrap_or_else(|e| {
-                error!("Failed to take item from stash for {} (owner {}): {:?}", name, owner, e);
-                None
-            });
-            success = item.is_some();
+            let res = self.character_manager.take_stash_item(&owner, page, index).await;
+            match res {
+                Ok(i) => {
+                    item = i;
+                    success = item.is_some();
+                }
+                Err(e) => {
+                    error!("Failed to take item from stash for {} (owner {}): {:?}", name, owner, e);
+                    self.clients.unlock_stash(&owner);
+                    return Err(e);
+                }
+            }
             self.clients.unlock_stash(&owner);
         }
 
@@ -244,19 +289,26 @@ impl Bus {
                 success,
                 item,
                 connection_id,
-            }).await.ok();
+            }).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_stash_put(&mut self, sender_id: u32, name: String, page: i32, index: i32, item: crate::models::Item, connection_id: i32) {
+    async fn handle_stash_put(&mut self, sender_id: u32, name: String, page: i32, index: i32, item: crate::models::Item, connection_id: u64) -> Result<()> {
         let mut success = false;
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
 
         if self.clients.lock_stash(owner.clone(), sender_id) {
-            success = self.character_manager.put_stash_item(&owner, page, index, &item).await.unwrap_or_else(|e| {
-                error!("Failed to put item into stash for {} (owner {}): {:?}", name, owner, e);
-                false
-            });
+            let res = self.character_manager.put_stash_item(&owner, page, index, &item).await;
+            match res {
+                Ok(s) => success = s,
+                Err(e) => {
+                    error!("Failed to put item into stash for {} (owner {}): {:?}", name, owner, e);
+                    self.clients.unlock_stash(&owner);
+                    return Err(e);
+                }
+            }
             self.clients.unlock_stash(&owner);
         }
 
@@ -267,47 +319,58 @@ impl Bus {
                 index,
                 success,
                 connection_id,
-            }).await.ok();
+            }).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_stash_open(&mut self, sender_id: u32, name: String, connection_id: i32) {
+    async fn handle_stash_open(&mut self, sender_id: u32, name: String, connection_id: u64) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash opened for {} (owner {})", name, owner);
 
         // return items immediately
-        let items = self.character_manager.get_stash_page(&owner, 0).await.unwrap_or_else(|e| {
+        let items = self.character_manager.get_stash_page(&owner, 0).await;
+        if let Err(e) = items {
             error!("Failed to get initial stash page for {} (owner {}): {:?}", name, owner, e);
-            vec![None; 64]
-        });
+            return Err(e);
+        }
+
+        let items = items.unwrap_or_else(|_| vec![None; 64]);
 
         if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
             server.server_channel.send(BusAction::StashOpenResult {
                 name,
                 items,
                 connection_id,
-            }).await.ok();
+            }).await?;
         }
+
+        Ok(())
     }
 
-    async fn handle_stash_close(&mut self, _sender_id: u32, name: String, _connection_id: i32) {
+    async fn handle_stash_close(&mut self, _sender_id: u32, name: String, _connection_id: u64) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash closed for {} (owner {})", name, owner);
+        Ok(())
     }
 
-    async fn handle_stash_close_by_id(&mut self, _sender_id: u32, name: String, id: i32, _connection_id: i32) {
+    async fn handle_stash_close_by_id(&mut self, _sender_id: u32, name: String, id: i32, _connection_id: u64) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash closed by ID {} for {} (owner {})", id, name, owner);
+        Ok(())
     }
 
-    async fn handle_set_owner(&mut self, _sender_id: u32, name: String, password: String, reset: bool, owner: String, _connection_id: i32) {
+    async fn handle_set_owner(&mut self, _sender_id: u32, name: String, password: String, reset: bool, owner: String, _connection_id: u64) -> Result<()> {
         info!("SetOwner called for character {} by owner {}, reset: {}", name, owner, reset);
         if let Err(e) = self.character_manager.set_owner(&name, &password, reset, &owner).await {
             error!("Failed to set owner for character {}: {:?}", name, e);
+            return Err(e);
         }
+        Ok(())
     }
 
-    async fn handle_relay(&mut self, cmd: BusAction, id: u32, message: &String) {
+    async fn handle_relay(&mut self, cmd: BusAction, id: u32, message: &String) -> Result<()> {
         let cl = self.clients.get_server_address(id);
 
         info!("Msg from server {} ({}): {}", id, cl, message);
@@ -319,6 +382,8 @@ impl Bus {
         if id != DISCORD_CHANNEL {
             self.discord_send(message).await;
         }
+
+        Ok(())
     }
 
     async fn game_server_sendall(&self, cmd: BusAction, sender_id: u32, message: &String) {
@@ -332,7 +397,9 @@ impl Bus {
 
             let new_cmd = cmd.clone();
             trace!("Broadcasting to server {}: {:?}", cl.id, message);
-            cl.server_channel.send(new_cmd).await.ok();
+            if let Err(e) = cl.server_channel.send(new_cmd).await {
+                error!("Failed to broadcast message to server {}: {:?}", cl.id, e);
+            }
         }
     }
 
