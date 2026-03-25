@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_tuple::*;
 use serde_big_array::BigArray;
+use crate::messages::PlayerConnectionId;
 
 pub const MAX_VRXITEMMODS: usize = 6;
 pub const MAX_VRXITEMS: usize = 11;
@@ -192,7 +193,7 @@ pub struct Skills {
     pub title: String,
 
     pub nerfme: i32,
-    pub connection_id: u64,
+    pub connection_id: PlayerConnectionId,
 
     pub items: [Item; MAX_VRXITEMS],
     pub weapons: [Weapon; MAX_WEAPONS],

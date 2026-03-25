@@ -1,15 +1,15 @@
 use crate::character::CharacterManager;
 use crate::discord::DISCORD_CHANNEL;
 use crate::instance::BusAction;
-use crate::serverlist::GameServerList;
+use crate::serverlist::{GameServerList, ServerId};
 use log::{debug, error, info, trace};
 use serenity::all::Channel::Guild;
 use serenity::all::{ChannelId, CreateMessage, GuildChannel, Http};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
-use crate::messages::LoadStatus;
+use crate::messages::{LoadStatus, PlayerConnectionId};
 use anyhow::Result;
-use crate::models::Skills;
+use crate::models::{Item, Skills};
 
 pub struct DiscordContext {
     pub(crate) http: Option<Arc<Http>>,
@@ -177,7 +177,8 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_load(&mut self, sender_id: u32, name: String, password: String, connection_id: u64) -> Result<()> {
+
+    async fn handle_load(&mut self, sender_id: ServerId, name: String, password: String, connection_id: PlayerConnectionId) -> Result<()> {
         let skills = self.character_manager.load_character(&name).await;
         let server = self.clients.get_server_copy_by_id(sender_id);
 
@@ -223,7 +224,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_save(&mut self, _sender_id: u32, name: String, connection_id: u64, mut skills: Box<Skills>) -> Result<()> {
+    async fn handle_save(&mut self, _sender_id: ServerId, name: String, connection_id: PlayerConnectionId, mut skills: Box<Skills>) -> Result<()> {
         skills.connection_id = connection_id;
         if let Err(e) = self.character_manager.save_character(&skills).await {
             error!("Failed to save character {}: {:?}", name, e);
@@ -232,13 +233,13 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_save_and_close(&mut self, sender_id: u32, name: String, connection_id: u64, skills: Box<Skills>) -> Result<()> {
+    async fn handle_save_and_close(&mut self, sender_id: ServerId, name: String, connection_id: PlayerConnectionId, skills: Box<Skills>) -> Result<()> {
         self.handle_save(sender_id, name.clone(), connection_id, skills).await?;
         self.clients.unlock_character(&name);
         Ok(())
     }
 
-    async fn handle_stash_page(&mut self, sender_id: u32, name: String, page: i32, connection_id: u64) -> Result<()> {
+    async fn handle_stash_page(&mut self, sender_id: ServerId, name: String, page: i32, connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         let items = self.character_manager.get_stash_page(&owner, page).await;
 
@@ -261,7 +262,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_stash_take(&mut self, sender_id: u32, name: String, page: i32, index: i32, connection_id: u64) -> Result<()> {
+    async fn handle_stash_take(&mut self, sender_id: ServerId, name: String, page: i32, index: i32, connection_id: PlayerConnectionId) -> Result<()> {
         let mut success = false;
         let mut item = None;
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
@@ -296,7 +297,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_stash_put(&mut self, sender_id: u32, name: String, page: i32, index: i32, item: crate::models::Item, connection_id: u64) -> Result<()> {
+    async fn handle_stash_put(&mut self, sender_id: ServerId, name: String, page: i32, index: i32, item: Item, connection_id: PlayerConnectionId) -> Result<()> {
         let mut success = false;
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
 
@@ -326,7 +327,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_stash_open(&mut self, sender_id: u32, name: String, connection_id: u64) -> Result<()> {
+    async fn handle_stash_open(&mut self, sender_id: ServerId, name: String, connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash opened for {} (owner {})", name, owner);
 
@@ -350,19 +351,19 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_stash_close(&mut self, _sender_id: u32, name: String, _connection_id: u64) -> Result<()> {
+    async fn handle_stash_close(&mut self, _sender_id: ServerId, name: String, _connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash closed for {} (owner {})", name, owner);
         Ok(())
     }
 
-    async fn handle_stash_close_by_id(&mut self, _sender_id: u32, name: String, id: i32, _connection_id: u64) -> Result<()> {
+    async fn handle_stash_close_by_id(&mut self, _sender_id: ServerId, name: String, id: i32, _connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
         info!("Stash closed by ID {} for {} (owner {})", id, name, owner);
         Ok(())
     }
 
-    async fn handle_set_owner(&mut self, _sender_id: u32, name: String, password: String, reset: bool, owner: String, _connection_id: u64) -> Result<()> {
+    async fn handle_set_owner(&mut self, _sender_id: ServerId, name: String, password: String, reset: bool, owner: String, _connection_id: PlayerConnectionId) -> Result<()> {
         info!("SetOwner called for character {} by owner {}, reset: {}", name, owner, reset);
         if let Err(e) = self.character_manager.set_owner(&name, &password, reset, &owner).await {
             error!("Failed to set owner for character {}: {:?}", name, e);
@@ -387,7 +388,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn game_server_sendall(&self, cmd: BusAction, sender_id: u32, message: &String) {
+    async fn game_server_sendall(&self, cmd: BusAction, sender_id: ServerId, message: &String) {
         let channels = self.clients.get_servers_snapshot();
         debug!("Broadcasting to all servers: {:?}", channels);
 

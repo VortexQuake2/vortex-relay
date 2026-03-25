@@ -4,9 +4,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Sender;
 
+pub type ServerId = u32;
+
 #[derive(Debug, Clone)]
 pub struct VortexServer {
-    pub id: u32,
+    pub id: ServerId,
     pub hostname: String,
     pub address: SocketAddr,
     pub server_channel: Sender<BusAction>,
@@ -48,8 +50,8 @@ impl SharedBusContext {
 #[derive(Debug, Clone)]
 pub struct GameServerList {
     list: Arc<Mutex<Vec<VortexServer>>>,
-    locked_characters: Arc<Mutex<HashMap<String, u32>>>,
-    locked_stashes: Arc<Mutex<HashMap<String, u32>>>,
+    locked_characters: Arc<Mutex<HashMap<String, ServerId>>>,
+    locked_stashes: Arc<Mutex<HashMap<String, ServerId>>>,
     bus: SharedBusContext,
 }
 
@@ -73,7 +75,7 @@ impl GameServerList {
         }
     }
 
-    pub fn lock_stash(&self, owner_name: String, server_id: u32) -> bool {
+    pub fn lock_stash(&self, owner_name: String, server_id: ServerId) -> bool {
         let mut lock = self.locked_stashes.lock().unwrap();
         if lock.get(&owner_name).is_some_and(|&id| id != server_id) {
             return false;
@@ -87,7 +89,7 @@ impl GameServerList {
         lock.remove(owner_name);
     }
 
-    pub fn lock_character(&self, name: String, server_id: u32) -> bool {
+    pub fn lock_character(&self, name: String, server_id: ServerId) -> bool {
         let mut lock = self.locked_characters.lock().unwrap();
         if lock.contains_key(&name) {
             return false;
@@ -101,7 +103,7 @@ impl GameServerList {
         lock.remove(name);
     }
 
-    pub fn unlock_all_from_server(&self, server_id: u32) {
+    pub fn unlock_all_from_server(&self, server_id: ServerId) {
         {
             let mut lock = self.locked_characters.lock().unwrap();
             lock.retain(|_, id| *id != server_id);
@@ -120,7 +122,7 @@ impl GameServerList {
         self.bus.send(action).await
     }
 
-    pub fn authorize(&self, id: u32, key: String) -> bool {
+    pub fn authorize(&self, id: ServerId, key: String) -> bool {
         let bus = self.bus.ctx.lock().unwrap();
         server_by_id!(self, id, server {
            server.authorized = bus.authorized_keys.contains(&key);
@@ -130,7 +132,7 @@ impl GameServerList {
         false
     }
 
-    pub fn get_server_copy_by_id(&self, id: u32) -> Option<VortexServer> {
+    pub fn get_server_copy_by_id(&self, id: ServerId) -> Option<VortexServer> {
         server_by_id!(self, id, server {
             return Some(server.clone());
         });
@@ -138,7 +140,7 @@ impl GameServerList {
         None
     }
 
-    pub fn change_player_count(&self, id: u32, delta: i32) -> Option<u32> {
+    pub fn change_player_count(&self, id: ServerId, delta: i32) -> Option<u32> {
         server_by_id!(self, id, server {
             server.player_count = server.player_count.saturating_add_signed(delta);
             return Some(server.player_count)
@@ -147,13 +149,13 @@ impl GameServerList {
         None
     }
 
-    pub fn set_player_count(&self, id: u32, count: u32) {
+    pub fn set_player_count(&self, id: ServerId, count: u32) {
         server_by_id!(self, id, server {
             server.player_count = count;
         });
     }
 
-    pub fn set_hostname(&self, id: u32, hostname: String) -> bool {
+    pub fn set_hostname(&self, id: ServerId, hostname: String) -> bool {
         server_by_id!(self, id, server {
             server.hostname = hostname;
             return true;
@@ -175,7 +177,7 @@ impl GameServerList {
         lock.push(server)
     }
 
-    pub fn remove(&self, id: u32) {
+    pub fn remove(&self, id: ServerId) {
         let mut lock = self.list.lock().unwrap();
         lock.retain(|x| x.id != id);
     }
@@ -193,7 +195,7 @@ impl GameServerList {
     //         .is_some_and(|x| x.authorized)
     // }
 
-    pub fn get_server_address(&self, id: u32) -> String {
+    pub fn get_server_address(&self, id: ServerId) -> String {
         let lock = self.list.lock().unwrap();
         lock.iter()
             .find(|x| x.id == id)

@@ -3,7 +3,7 @@ use anyhow::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::error::SendError;
 use crate::instance::{BusAction, GameServerAction};
-use crate::messages::{AuthorizeClientMessage, LoadStatus};
+use crate::messages::{AuthorizeClientMessage, LoadStatus, PlayerConnectionId};
 use crate::proto::ClientPackage;
 use crate::serverlist::{GameServerList, VortexServer};
 
@@ -147,7 +147,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_load(&self, name: String, password: String, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_load(&self, name: String, password: String, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::Load {
             sender_id: self.id,
             name,
@@ -157,7 +157,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_save(&self, name: String, connection_id: u64, skills: Box<Skills>) -> Result<(), Error> {
+    async fn handle_game_save(&self, name: String, connection_id: PlayerConnectionId, skills: Box<Skills>) -> Result<(), Error> {
         self.send(BusAction::Save {
             sender_id: self.id,
             name,
@@ -167,7 +167,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_save_and_close(&self, name: String, connection_id: u64, skills: Box<Skills>) -> Result<(), Error> {
+    async fn handle_game_save_and_close(&self, name: String, connection_id: PlayerConnectionId, skills: Box<Skills>) -> Result<(), Error> {
         self.send(BusAction::SaveAndClose {
             sender_id: self.id,
             name,
@@ -177,7 +177,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_page(&self, name: String, page: i32, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_page(&self, name: String, page: i32, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashPage {
             sender_id: self.id,
             name,
@@ -187,7 +187,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_take(&self, name: String, page: i32, index: i32, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_take(&self, name: String, page: i32, index: i32, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashTake {
             sender_id: self.id,
             name,
@@ -198,7 +198,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_put(&self, name: String, page: i32, index: i32, item: Item, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_put(&self, name: String, page: i32, index: i32, item: Item, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashStore {
             sender_id: self.id,
             name,
@@ -210,7 +210,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_open(&self, name: String, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_open(&self, name: String, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashOpen {
             sender_id: self.id,
             name,
@@ -219,7 +219,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_close(&self, name: String, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_close(&self, name: String, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashClose {
             sender_id: self.id,
             name,
@@ -228,7 +228,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_stash_close_by_id(&self, name: String, id: i32, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_stash_close_by_id(&self, name: String, id: i32, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::StashCloseById {
             sender_id: self.id,
             name,
@@ -238,7 +238,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_set_owner(&self, name: String, password: String, reset: bool, owner: String, connection_id: u64) -> Result<(), Error> {
+    async fn handle_game_set_owner(&self, name: String, password: String, reset: bool, owner: String, connection_id: PlayerConnectionId) -> Result<(), Error> {
         self.send(BusAction::SetOwner {
             sender_id: self.id,
             name,
@@ -336,7 +336,7 @@ impl GameServerBusCommandHandler<'_> {
         self.send_command(Box::from(GameServerAction::Relay { message })).await
     }
 
-    async fn handle_bus_load(&mut self, status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>>) -> Result<(), SendError<Vec<u8>>> {
+    async fn handle_bus_load(&mut self, status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>>) -> Result<(), SendError<Vec<u8>>> {
         self.send_command(Box::from(GameServerAction::LoadResult {
             status,
             connection_id,
@@ -344,15 +344,15 @@ impl GameServerBusCommandHandler<'_> {
         })).await
     }
 
-    async fn handle_bus_stash_page(&mut self, name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
+    async fn handle_bus_stash_page(&mut self, name: String, page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId) -> Result<(), SendError<Vec<u8>>> {
         self.send_command(Box::from(GameServerAction::StashPage { name, page, items, connection_id })).await
     }
 
-    async fn handle_bus_stash_take(&mut self, name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
+    async fn handle_bus_stash_take(&mut self, name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId) -> Result<(), SendError<Vec<u8>>> {
         self.send_command(Box::from(GameServerAction::StashTake { name, page, index, success, item, connection_id })).await
     }
 
-    async fn handle_bus_stash_put(&mut self, name: String, page: i32, index: i32, success: bool, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
+    async fn handle_bus_stash_put(&mut self, name: String, page: i32, index: i32, success: bool, connection_id: PlayerConnectionId) -> Result<(), SendError<Vec<u8>>> {
         self.send_command(Box::from(GameServerAction::StashStore {
             name,
             page,
@@ -375,7 +375,7 @@ impl GameServerBusCommandHandler<'_> {
         })).await
     }
 
-    async fn handle_bus_stash_open_result(&mut self, name: String, items: Vec<Option<Item>>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
+    async fn handle_bus_stash_open_result(&mut self, name: String, items: Vec<Option<Item>>, connection_id: PlayerConnectionId) -> Result<(), SendError<Vec<u8>>> {
         self.send_command(Box::from(GameServerAction::StashOpenResult { name, connection_id, items })).await
     }
 }

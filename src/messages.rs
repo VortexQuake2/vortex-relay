@@ -1,7 +1,9 @@
 use crate::models::{Item, Skills};
-
+use crate::serverlist::ServerId;
 // almost all these types are going to be msgpack serialized into arrays and arrays of arrays, so
 // ordering matters. changing order is a breaking change.
+
+pub type PlayerConnectionId = u64;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "a")]
@@ -55,34 +57,34 @@ pub enum GameServerAction {
 
 
     // load a character
-    Load { name: String, password: String, connection_id: u64, skills: Option<Box<Skills>> },
+    Load { name: String, password: String, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
 
-    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>> },
+    LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
 
     // save a character
-    Save { name: String, connection_id: u64, skills: Box<Skills> },
+    Save { name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
 
     // save and close character (unlock)
-    SaveAndClose { name: String, connection_id: u64, skills: Box<Skills> },
+    SaveAndClose { name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
 
     // stash commands
-    StashPage { name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64 },
+    StashPage { name: String, page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId },
 
     // stash take needs to be properly implemented on the C side - if the inventory is full it has to put it back, too
     // these movements need to be logged in case of network or software failure with a date and time
-    StashTake { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: u64 },
+    StashTake { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId },
     
     // This is "StashStore" in C.
-    StashStore { name: String, page: i32, index: i32, item: Item, success: bool, connection_id: u64 },
+    StashStore { name: String, page: i32, index: i32, item: Item, success: bool, connection_id: PlayerConnectionId },
 
-    StashOpen { name: String, connection_id: u64 },
-    StashOpenResult { name: String, connection_id: u64, items: Vec<Option<Item>> },
-    StashClose { name: String, connection_id: u64 },
-    StashCloseById { name: String, id: i32, connection_id: u64 },
+    StashOpen { name: String, connection_id: PlayerConnectionId },
+    StashOpenResult { name: String, connection_id: PlayerConnectionId, items: Vec<Option<Item>> },
+    StashClose { name: String, connection_id: PlayerConnectionId },
+    StashCloseById { name: String, id: i32, connection_id: PlayerConnectionId },
 
     // the master password field that allows us to set an owner is called "email", but it really isn't!
-    SetOwner { name: String, password: String, reset: bool, owner: String, connection_id: u64 },
-    SetOwnerResult { connection_id: u64, status: SetOwnerStatus }
+    SetOwner { name: String, password: String, reset: bool, owner: String, connection_id: PlayerConnectionId },
+    SetOwnerResult { connection_id: PlayerConnectionId, status: SetOwnerStatus }
 
     // TODO: character logs! they're currently purely on the C side (with raw files) but we want something
     // we can audit across servers. (Ideally, they identify the server itself.)
@@ -98,7 +100,7 @@ mod tests {
     #[test]
     pub fn test_gsa_size() {
         // test memory of a non serialized GSA
-        let size = std::mem::size_of::<GameServerAction>();
+        let size = size_of::<GameServerAction>();
         assert!(size <= 1000, "GameServerAction is too large: {}", size);
     }
 }
@@ -121,27 +123,27 @@ impl GameServerAction {
 // internal IPC message
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub enum BusAction {
-    Relay { sender_id: u32, message: String },
-    Load { sender_id: u32, name: String, password: String, connection_id: u64 },
-    Save { sender_id: u32, name: String, connection_id: u64, skills: Box<Skills> },
-    SaveAndClose { sender_id: u32, name: String, connection_id: u64, skills: Box<Skills> },
-    StashPage { sender_id: u32, name: String, page: i32, connection_id: u64 },
-    StashTake { sender_id: u32, name: String, page: i32, index: i32, connection_id: u64 },
-    StashStore { sender_id: u32, name: String, page: i32, index: i32, item: Item, connection_id: u64 },
-    StashOpen { sender_id: u32, name: String, connection_id: u64 },
-    StashClose { sender_id: u32, name: String, connection_id: u64 },
-    StashCloseById { sender_id: u32, name: String, id: i32, connection_id: u64 },
-    SetOwner { sender_id: u32, name: String, password: String, reset: bool, owner: String, connection_id: u64 },
+    Relay { sender_id: ServerId, message: String },
+    Load { sender_id: ServerId, name: String, password: String, connection_id: PlayerConnectionId },
+    Save { sender_id: ServerId, name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
+    SaveAndClose { sender_id: ServerId, name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
+    StashPage { sender_id: ServerId, name: String, page: i32, connection_id: PlayerConnectionId },
+    StashTake { sender_id: ServerId, name: String, page: i32, index: i32, connection_id: PlayerConnectionId },
+    StashStore { sender_id: ServerId, name: String, page: i32, index: i32, item: Item, connection_id: PlayerConnectionId },
+    StashOpen { sender_id: ServerId, name: String, connection_id: PlayerConnectionId },
+    StashClose { sender_id: ServerId, name: String, connection_id: PlayerConnectionId },
+    StashCloseById { sender_id: ServerId, name: String, id: i32, connection_id: PlayerConnectionId },
+    SetOwner { sender_id: ServerId, name: String, password: String, reset: bool, owner: String, connection_id: PlayerConnectionId },
 
-    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>> },
-    StashPageResult { name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64 },
-    StashTakeResult { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: u64 },
-    StashStoreResult { name: String, page: i32, index: i32, success: bool, connection_id: u64 },
-    StashOpenResult { name: String, connection_id: u64, items: Vec<Option<Item>> },
+    LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
+    StashPageResult { name: String, page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId },
+    StashTakeResult { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId },
+    StashStoreResult { name: String, page: i32, index: i32, success: bool, connection_id: PlayerConnectionId },
+    StashOpenResult { name: String, connection_id: PlayerConnectionId, items: Vec<Option<Item>> },
 
     // allow server to connect to relay
     AuthorizeRequest {
-        sender_id: u32,
+        sender_id: ServerId,
         key: String,
         hostname: String,
         player_count: u32,
@@ -149,7 +151,7 @@ pub enum BusAction {
     AuthorizeResult { ok: bool },
 
     // the q2 server instance has gone offline
-    ServerOffline { sender_id: u32 },
+    ServerOffline { sender_id: ServerId },
 }
 
 
