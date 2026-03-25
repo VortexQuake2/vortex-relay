@@ -32,12 +32,13 @@ impl GameMessageReceivedHandler {
         self.peers.send(action).await
     }
 
-    pub async fn dispatch(&self, command: GameServerAction) -> Result<(), Error> {
+    pub async fn dispatch(&self, command: Box<GameServerAction>) -> Result<(), Error> {
         if command.requires_authorization() && !self.server_state().authorized {
             return Ok(());
         }
 
-        match command.clone() {
+        let cmd = command.clone();
+        match *cmd {
             GameServerAction::Exit => {
                 return Ok(());
             }
@@ -69,10 +70,10 @@ impl GameMessageReceivedHandler {
             },
             GameServerAction::SetOwnerResult { .. } => {
                 anyhow::bail!("SetOwnerResult is a relay to server message");
-            }
+            },
         }
 
-        anyhow::bail!("Unknown command received from game server: {:?}", command);
+        Ok(())
     }
 
     async fn handle_game_spawnentities(&self, mapname: String) -> Result<(), Error> {
@@ -156,7 +157,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_save(&self, name: String, connection_id: u64, skills: Skills) -> Result<(), Error> {
+    async fn handle_game_save(&self, name: String, connection_id: u64, skills: Box<Skills>) -> Result<(), Error> {
         self.send(BusAction::Save {
             sender_id: self.id,
             name,
@@ -166,7 +167,7 @@ impl GameMessageReceivedHandler {
         Ok(())
     }
 
-    async fn handle_game_save_and_close(&self, name: String, connection_id: u64, skills: Skills) -> Result<(), Error> {
+    async fn handle_game_save_and_close(&self, name: String, connection_id: u64, skills: Box<Skills>) -> Result<(), Error> {
         self.send(BusAction::SaveAndClose {
             sender_id: self.id,
             name,
@@ -290,7 +291,7 @@ impl GameServerBusCommandHandler<'_> {
         }
     }
 
-    async fn send_command(&self, command: GameServerAction) -> Result<(), SendError<Vec<u8>>> {
+    async fn send_command(&self, command: Box<GameServerAction>) -> Result<(), SendError<Vec<u8>>> {
         self.sender.send(ClientPackage::from(command).into()).await
     }
 
@@ -317,14 +318,14 @@ impl GameServerBusCommandHandler<'_> {
 
     async fn handle_bus_authorize(&mut self, ok: bool) -> Result<(), SendError<Vec<u8>>>{
         if ok {
-            self.send_command(GameServerAction::Authorize {
+            self.send_command(Box::from(GameServerAction::Authorize {
                 result: AuthorizeClientMessage::Authorized,
-            })
+            }))
                 .await
         } else {
-            self.send_command(GameServerAction::Authorize {
+            self.send_command(Box::from(GameServerAction::Authorize {
                 result: AuthorizeClientMessage::Unauthorized,
-            })
+            }))
                 .await
         }
     }
@@ -332,34 +333,49 @@ impl GameServerBusCommandHandler<'_> {
     async fn handle_bus_relay(&mut self, message: String) -> Result<(), SendError<Vec<u8>>> {
         // relay the message to the client
         let message = message.chars().filter(|x| x.is_ascii()).collect::<String>();
-        self.send_command(GameServerAction::Relay { message }).await
+        self.send_command(Box::from(GameServerAction::Relay { message })).await
     }
 
-    async fn handle_bus_load(&mut self, status: LoadStatus, connection_id: u64, skills: Option<Skills>) -> Result<(), SendError<Vec<u8>>> {
-        self.send_command(GameServerAction::LoadResult {
+    async fn handle_bus_load(&mut self, status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>>) -> Result<(), SendError<Vec<u8>>> {
+        self.send_command(Box::from(GameServerAction::LoadResult {
             status,
             connection_id,
             skills,
-        }).await
+        })).await
     }
 
     async fn handle_bus_stash_page(&mut self, name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
-        self.send_command(GameServerAction::StashPage { name, page, items, connection_id }).await
+        self.send_command(Box::from(GameServerAction::StashPage { name, page, items, connection_id })).await
     }
 
     async fn handle_bus_stash_take(&mut self, name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
-        self.send_command(GameServerAction::StashTake { name, page, index, success, item, connection_id }).await
+        self.send_command(Box::from(GameServerAction::StashTake { name, page, index, success, item, connection_id })).await
     }
 
     async fn handle_bus_stash_put(&mut self, name: String, page: i32, index: i32, success: bool, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
-        self.send_command(GameServerAction::StashStore { name, page, index, success, connection_id, item: Item {
-            item_type: 0, item_level: 0, quantity: 0, untradeable: 0, id: "".to_string(), name: "".to_string(),
-            num_mods: 0, set_code: 0, class_num: 0, modifiers: [crate::models::IModifier { modifier_type: 0, index: 0, value: 0, set: 0 }; 6],
-            is_unique: 0
-        } }).await
+        self.send_command(Box::from(GameServerAction::StashStore {
+            name,
+            page,
+            index,
+            success,
+            connection_id,
+            item: Item {
+                item_type: 0,
+                item_level: 0,
+                quantity: 0,
+                untradeable: 0,
+                id: "".to_string(),
+                name: "".to_string(),
+                num_mods: 0,
+                set_code: 0,
+                class_num: 0,
+                modifiers: [crate::models::IModifier { modifier_type: 0, index: 0, value: 0, set: 0 }; 6],
+                is_unique: 0
+            }
+        })).await
     }
 
     async fn handle_bus_stash_open_result(&mut self, name: String, items: Vec<Option<Item>>, connection_id: u64) -> Result<(), SendError<Vec<u8>>> {
-        self.send_command(GameServerAction::StashOpenResult { name, connection_id, items }).await
+        self.send_command(Box::from(GameServerAction::StashOpenResult { name, connection_id, items })).await
     }
 }

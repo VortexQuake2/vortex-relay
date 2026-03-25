@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use crate::messages::LoadStatus;
 use anyhow::Result;
+use crate::models::Skills;
 
 pub struct DiscordContext {
     pub(crate) http: Option<Arc<Http>>,
@@ -222,7 +223,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_save(&mut self, _sender_id: u32, name: String, connection_id: u64, mut skills: crate::models::Skills) -> Result<()> {
+    async fn handle_save(&mut self, _sender_id: u32, name: String, connection_id: u64, mut skills: Box<Skills>) -> Result<()> {
         skills.connection_id = connection_id;
         if let Err(e) = self.character_manager.save_character(&skills).await {
             error!("Failed to save character {}: {:?}", name, e);
@@ -231,7 +232,7 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_save_and_close(&mut self, sender_id: u32, name: String, connection_id: u64, skills: crate::models::Skills) -> Result<()> {
+    async fn handle_save_and_close(&mut self, sender_id: u32, name: String, connection_id: u64, skills: Box<Skills>) -> Result<()> {
         self.handle_save(sender_id, name.clone(), connection_id, skills).await?;
         self.clients.unlock_character(&name);
         Ok(())

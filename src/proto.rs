@@ -54,7 +54,7 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024;
 pub struct ClientPackage {
     magic: u32,
     size: u32,
-    client_command: GameServerAction,
+    client_command: Box<GameServerAction>
 }
 
 #[derive(Debug, PartialEq)]
@@ -91,10 +91,10 @@ impl ClientPackage {
 
         let size = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
 
-        let client_command: GameServerAction;
+        let client_command: Box<GameServerAction>;
         if size as usize <= bytes.len() - 8 {
             let slice = &bytes[8..8 + size as usize];
-            client_command = rmp_serde::from_slice(slice)?;
+            client_command = Box::new(rmp_serde::from_slice(slice)?);
         } else {
             return Err(MessageParseError::TooSmall.into());
         }
@@ -107,8 +107,8 @@ impl ClientPackage {
     }
 }
 
-impl From<GameServerAction> for ClientPackage {
-    fn from(value: GameServerAction) -> Self {
+impl From<Box<GameServerAction>> for ClientPackage {
+    fn from(value: Box<GameServerAction>) -> Self {
         let vec = rmp_serde::to_vec(&value).unwrap();
         Self {
             magic: MAGIC,
@@ -182,7 +182,8 @@ impl ProtocolHandler {
         self.pending_buffer.clear();
         while start < full_buffer.len() {
             let data = &full_buffer[start..];
-            let message = ClientPackage::from_bytes(data).with_context(|| rhexdumps!(data));
+            let message = ClientPackage::from_bytes(data)
+                .with_context(|| rhexdumps!(data));
             if message.is_err() {
                 if let Some(e) = message.err() {
                     if let Some(e2) = e.downcast_ref::<MessageParseError>() {
@@ -206,7 +207,7 @@ impl ProtocolHandler {
             }
 
             self.action_handler
-                .dispatch(message.client_command.clone())
+                .dispatch(message.client_command)
                 .await?;
 
             start += 8 + message.size as usize;

@@ -55,15 +55,15 @@ pub enum GameServerAction {
 
 
     // load a character
-    Load { name: String, password: String, connection_id: u64, skills: Option<Skills> },
+    Load { name: String, password: String, connection_id: u64, skills: Option<Box<Skills>> },
 
-    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Skills> },
+    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>> },
 
     // save a character
-    Save { name: String, connection_id: u64, skills: Skills },
+    Save { name: String, connection_id: u64, skills: Box<Skills> },
 
     // save and close character (unlock)
-    SaveAndClose { name: String, connection_id: u64, skills: Skills },
+    SaveAndClose { name: String, connection_id: u64, skills: Box<Skills> },
 
     // stash commands
     StashPage { name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64 },
@@ -91,6 +91,18 @@ pub enum GameServerAction {
     // This will help us identify where things happened.
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn test_gsa_size() {
+        // test memory of a non serialized GSA
+        let size = std::mem::size_of::<GameServerAction>();
+        assert!(size <= 1000, "GameServerAction is too large: {}", size);
+    }
+}
+
 impl From<GameServerAction> for Vec<u8> {
     fn from(value: GameServerAction) -> Vec<u8> {
         rmp_serde::to_vec(&value).unwrap()
@@ -111,8 +123,8 @@ impl GameServerAction {
 pub enum BusAction {
     Relay { sender_id: u32, message: String },
     Load { sender_id: u32, name: String, password: String, connection_id: u64 },
-    Save { sender_id: u32, name: String, connection_id: u64, skills: Skills },
-    SaveAndClose { sender_id: u32, name: String, connection_id: u64, skills: Skills },
+    Save { sender_id: u32, name: String, connection_id: u64, skills: Box<Skills> },
+    SaveAndClose { sender_id: u32, name: String, connection_id: u64, skills: Box<Skills> },
     StashPage { sender_id: u32, name: String, page: i32, connection_id: u64 },
     StashTake { sender_id: u32, name: String, page: i32, index: i32, connection_id: u64 },
     StashStore { sender_id: u32, name: String, page: i32, index: i32, item: Item, connection_id: u64 },
@@ -121,7 +133,7 @@ pub enum BusAction {
     StashCloseById { sender_id: u32, name: String, id: i32, connection_id: u64 },
     SetOwner { sender_id: u32, name: String, password: String, reset: bool, owner: String, connection_id: u64 },
 
-    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Skills> },
+    LoadResult { status: LoadStatus, connection_id: u64, skills: Option<Box<Skills>> },
     StashPageResult { name: String, page: i32, items: Vec<Option<Item>>, connection_id: u64 },
     StashTakeResult { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: u64 },
     StashStoreResult { name: String, page: i32, index: i32, success: bool, connection_id: u64 },
@@ -142,7 +154,7 @@ pub enum BusAction {
 
 
 #[cfg(test)]
-mod tests {
+mod gsa_tests {
     use super::*;
     use rhexdump::prelude::*;
 

@@ -62,7 +62,7 @@ impl CharacterManager {
         Ok(())
     }
 
-    pub async fn load_character(&self, name: &str) -> Result<Option<Skills>> {
+    pub async fn load_character(&self, name: &str) -> Result<Option<Box<Skills>>> {
         let pool = match &self.pool {
             Some(pool) => pool,
             None => return Ok(None),
@@ -74,7 +74,7 @@ impl CharacterManager {
             .await?;
 
         if let Some(row) = row {
-            Ok(Some(Skills {
+            Ok(Some(Box::from(Skills {
                 progression: row.get::<Json<Progression>, _>("progression").0,
                 stats: row.get::<Json<Stats>, _>("stats").0,
                 inventory: row.get::<Json<BigI32Array>, _>("inventory").0,
@@ -92,7 +92,7 @@ impl CharacterManager {
                 abilities: row.get::<Json<BigUpgradeArray>, _>("abilities").0,
                 talents: row.get::<Json<TalentList>, _>("talents").0,
                 prestige: row.get::<Json<PrestigeList>, _>("prestige").0,
-            }))
+            })))
         } else {
             Ok(None)
         }

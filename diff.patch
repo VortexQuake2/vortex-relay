@@ -1,0 +1,780 @@
+diff --git a/src/instance.rs b/src/instance.rs
+index 21c7d85..6b35744 100644
+--- a/src/instance.rs
++++ b/src/instance.rs
+@@ -1,19 +1,19 @@
+ ﻿pub(crate) use crate::messages::{BusAction, GameServerAction};
+-use crate::proto::{game_socket_send_receive_all, GameServerSender};
++use crate::proto::{ ProtocolHandler};
+ use crate::serverlist::{GameServerList};
+-use log::{error};
++use log::error;
+ use std::sync::atomic::AtomicBool;
+ use std::sync::Arc;
+ use tokio::net::TcpStream;
+ use tokio::sync::mpsc::{Receiver, Sender};
+-use crate::messages::AuthorizeClientMessage;
++use crate::instancehandlers::GameServerBusCommandHandler;
+ 
+ pub struct GameServer {
+     id: u32,
+     bus_tx: Sender<BusAction>,
+-    pub bus_receiver: Option<Receiver<BusAction>>,
+-    pub game_socket: Option<TcpStream>,
+-    pub peers: GameServerList,
++    pub bus_receiver: Receiver<BusAction>,
++    pub game_socket_data_queue_sender: Sender<Vec<u8>>,
++    proto: ProtocolHandler,
+ }
+ 
+ impl GameServer {
+@@ -24,36 +24,35 @@ impl GameServer {
+         peers: GameServerList,
+     ) -> Self {
+         let bus_tx = peers.bus().bus_tx().clone();
++        let (
++            game_socket_data_queue_sender,
++            game_socket_data_queue_receiver) =
++            tokio::sync::mpsc::channel::<Vec<u8>>(100);
++
++        socket.set_nodelay(true).unwrap();
++
+         Self {
+             id,
+             bus_tx,
+-            game_socket: Some(socket),
+-            bus_receiver: Some(receiver),
+-            peers,
++            bus_receiver: receiver,
++            game_socket_data_queue_sender,
++            proto: ProtocolHandler::new(
++                game_socket_data_queue_receiver,
++                socket,
++                peers,
++                id,
++            )
+         }
+     }
+ 
+     pub(crate) async fn main_loop(mut self) {
+-        let (game_socket_data_queue_sender, game_socket_data_queue_receiver) =
+-            tokio::sync::mpsc::channel::<Vec<u8>>(100);
+         let alive = Arc::new(AtomicBool::new(true));
+-
+-        let game_socket = self.game_socket.take().unwrap();
+         let id = self.id;
++
+         let alive_socket = alive.clone();
+         let game_socket_communication_task = tokio::spawn(async move {
+-            let mut game_socket_data_queue_receiver = game_socket_data_queue_receiver;
+-            let mut game_socket = game_socket;
+-            let peers = self.peers.clone();
+-
+-            game_socket.set_nodelay(true).unwrap();
+             loop {
+-                if !game_socket_send_receive_all(
+-                    &mut game_socket_data_queue_receiver,
+-                    &mut game_socket,
+-                    &peers,
+-                    id,
+-                )
++                if !self.proto.communicate()
+                 .await
+                 .expect("Failed to process game instance socket")
+                 {
+@@ -66,16 +65,15 @@ impl GameServer {
+                 .await
+                 .unwrap();
+             alive_socket.store(false, std::sync::atomic::Ordering::Relaxed);
+-            game_socket_data_queue_receiver.close();
+         });
+ 
+-        let bus_receiver = self.bus_receiver.take().unwrap();
+         let bus_communication_task = tokio::spawn(async move {
+-            let mut bus_receiver = bus_receiver;
+-            let game_sender = GameServerSender(&game_socket_data_queue_sender);
++            let mut handler =
++                GameServerBusCommandHandler::new(&self.game_socket_data_queue_sender, &mut self.bus_receiver);
+             let alive_bus_communication = alive;
+             loop {
+-                if !handle_bus_message(&mut bus_receiver, &game_sender).await {
++                if let Err(e) = handler.dispatch().await {
++                    error!("Failed to process bus messages: {:?}", e);
+                     break;
+                 }
+ 
+@@ -98,154 +96,3 @@ impl GameServer {
+     }
+ }
+ 
+-// handle message sent by the game server
+-pub async fn on_game_server_message_received(
+-    id: u32,
+-    game_server_list: &GameServerList,
+-    command: GameServerAction,
+-) -> Option<Result<(), anyhow::Error>> {
+-    let bus = game_server_list.bus();
+-    let server_state = game_server_list.get_server_copy_by_id(id).unwrap();
+-
+-    match command {
+-        GameServerAction::Exit => {
+-            return Some(Ok(()));
+-        }
+-        GameServerAction::Relay { message } => {
+-            if !server_state.authorized {
+-                return None;
+-            }
+-
+-            // relay the message to all other transmitters
+-            bus.bus_tx()
+-                .send(BusAction::Relay {
+-                    sender_id: id,
+-                    message: message.trim().to_string(),
+-                })
+-                .await
+-                .unwrap();
+-        }
+-        GameServerAction::ClientBegin { name } => {
+-            if !server_state.authorized {
+-                return None;
+-            }
+-
+-            let count = game_server_list.change_player_count(id, 1);
+-
+-            bus.bus_tx()
+-                .send(BusAction::Relay {
+-                    sender_id: id,
+-                    message: format!(
+-                        "{} joined @ {} ({} player(s) online)",
+-                        name,
+-                        server_state.hostname,
+-                        count.unwrap()
+-                    ),
+-                })
+-                .await
+-                .unwrap()
+-        }
+-        GameServerAction::ClientDisconnect { name } => {
+-            if !server_state.authorized {
+-                return None;
+-            }
+-
+-            let count = game_server_list.change_player_count(id, -1);
+-
+-            bus.bus_tx()
+-                .send(BusAction::Relay {
+-                    sender_id: id,
+-                    message: format!(
+-                        "{} disconnected @ {} ({} player(s) online)",
+-                        name,
+-                        server_state.hostname,
+-                        count.unwrap()
+-                    ),
+-                })
+-                .await
+-                .unwrap()
+-        }
+-        GameServerAction::Login { .. } => {}
+-        GameServerAction::Authorize { result } => {
+-            if server_state.authorized {
+-                return None
+-            }
+-
+-            match result {
+-                AuthorizeClientMessage::Request { key, hostname, player_count } => {
+-                    bus.bus_tx()
+-                        .send(BusAction::AuthorizeRequest {
+-                            sender_id: id,
+-                            key,
+-                            hostname,
+-                            player_count
+-                        })
+-                        .await
+-                        .unwrap()
+-                },
+-                _ => {}
+-            }
+-        },
+-        GameServerAction::SpawnEntities { mapname } => {
+-            if !server_state.authorized {
+-                return None
+-            }
+-
+-            game_server_list.set_player_count(id, 0);
+-
+-            bus.bus_tx()
+-                .send(BusAction::Relay {
+-                    sender_id: id,
+-                    message: format!(
+-                        "Map changed at {}: {}",
+-                        server_state.hostname,
+-                        mapname
+-                    ),
+-                })
+-                .await
+-                .unwrap()
+-        }
+-    }
+-
+-    None
+-}
+-
+-// handle a message received from our bus
+-async fn handle_bus_message(
+-    bus_rx: &mut Receiver<BusAction>,
+-    client_sender: &GameServerSender<'_>,
+-) -> bool {
+-    let command = bus_rx.recv().await;
+-    if command.is_none() {
+-        return false;
+-    }
+-
+-    let command = command.unwrap();
+-    match command {
+-        BusAction::Relay { message, .. } => {
+-            // relay the message to the client
+-            let message = message.chars().filter(|x| x.is_ascii()).collect::<String>();
+-            client_sender
+-                .send_command(GameServerAction::Relay { message })
+-                .await
+-        },
+-        BusAction::AuthorizeResult { ok } => {
+-            if ok {
+-                client_sender
+-                    .send_command(GameServerAction::Authorize {
+-                        result: AuthorizeClientMessage::Authorized
+-                    })
+-                .await
+-            } else {
+-                client_sender
+-                    .send_command(GameServerAction::Authorize {
+-                        result: AuthorizeClientMessage::Unauthorized,
+-                    })
+-                    .await
+-            }
+-        }
+-        _ => {}
+-    }
+-
+-    true
+-}
+diff --git a/src/instancehandlers.rs b/src/instancehandlers.rs
+index e69de29..2abad9d 100644
+--- a/src/instancehandlers.rs
++++ b/src/instancehandlers.rs
+@@ -0,0 +1,195 @@
++use anyhow::Error;
++use tokio::sync::mpsc::{Receiver, Sender};
++use tokio::sync::mpsc::error::SendError;
++use crate::instance::{BusAction, GameServerAction};
++use crate::messages::AuthorizeClientMessage;
++use crate::proto::ClientPackage;
++use crate::serverlist::{GameServerList, VortexServer};
++
++// handle message sent by the game server
++#[derive(Debug, Clone)]
++pub struct GameMessageReceivedHandler {
++    id: u32,
++    peers: GameServerList,
++}
++
++impl GameMessageReceivedHandler {
++    pub fn server_state(&self) -> VortexServer {
++        self.peers
++            .get_server_copy_by_id(self.id)
++            .unwrap()
++    }
++
++    pub fn new(id: u32, peers: GameServerList) -> Self {
++        Self {
++            id,
++            peers,
++        }
++    }
++
++    pub async fn send(&self, action: BusAction) -> Result<(), SendError<BusAction>> {
++        self.peers.send(action).await
++    }
++
++    pub async fn dispatch(&self, command: GameServerAction) -> Result<(), Error> {
++        if command.requires_authorization() && !self.server_state().authorized {
++            return Ok(());
++        }
++
++        match command.clone() {
++            GameServerAction::Exit => {
++                return Ok(());
++            }
++            GameServerAction::Relay { message } => self.handle_game_relay(message).await?,
++            GameServerAction::ClientBegin { name } => self.handle_game_clientbegin(name).await?,
++            GameServerAction::ClientDisconnect { name } => {
++                self.handle_game_disconnect(name).await?
++            }
++            GameServerAction::Login { .. } => {}
++            GameServerAction::Authorize { result } => self.handle_game_authorize(result).await?,
++            GameServerAction::SpawnEntities { mapname } => {
++                self.handle_game_spawnentities(mapname).await?
++            }
++        }
++
++        anyhow::bail!("Unknown command received from game server: {:?}", command);
++    }
++
++    async fn handle_game_spawnentities(&self, mapname: String) -> Result<(), Error> {
++        self.peers.set_player_count(self.id, 0);
++
++        self.send(BusAction::Relay {
++                sender_id: self.id,
++                message: format!("Map changed at {}: {}", self.server_state().hostname, mapname),
++            })
++            .await?;
++
++        Ok(())
++    }
++
++    async fn handle_game_relay(&self, message: String) -> Result<(), Error> {
++        // relay the message to all other transmitters
++        self.send(BusAction::Relay {
++                sender_id: self.id,
++                message: message.trim().to_string(),
++            })
++            .await?;
++
++        Ok(())
++    }
++
++    async fn handle_game_clientbegin(&self, name: String) -> Result<(), Error> {
++        let count = self.peers.change_player_count(self.id, 1);
++
++        self.send(BusAction::Relay {
++                sender_id: self.id,
++                message: format!(
++                    "{} joined @ {} ({} player(s) online)",
++                    name,
++                    self.server_state().hostname,
++                    count.unwrap()
++                ),
++            })
++            .await?;
++
++        Ok(())
++    }
++
++    async fn handle_game_disconnect(&self, name: String) -> Result<(), Error> {
++        let count = self.peers.change_player_count(self.id, -1);
++
++        self.send(BusAction::Relay {
++                sender_id: self.id,
++                message: format!(
++                    "{} disconnected @ {} ({} player(s) online)",
++                    name,
++                    self.server_state().hostname,
++                    count.unwrap()
++                ),
++            })
++            .await?;
++
++        Ok(())
++    }
++
++    async fn handle_game_authorize(&self, result: AuthorizeClientMessage) -> Result<(), Error> {
++        if self.server_state().authorized {
++            return Ok(());
++        }
++
++        match result {
++            AuthorizeClientMessage::Request {
++                key,
++                hostname,
++                player_count,
++            } => {
++                self.peers
++                    .send(BusAction::AuthorizeRequest {
++                        sender_id: self.id,
++                        key,
++                        hostname,
++                        player_count,
++                    })
++                    .await?
++            }
++            _ => {}
++        }
++
++        Ok(())
++    }
++}
++
++// handle a message received from our bus
++pub struct GameServerBusCommandHandler<'a> {
++    pub sender: &'a Sender<Vec<u8>>,
++    pub receiver: &'a mut Receiver<BusAction>,
++}
++
++impl GameServerBusCommandHandler<'_> {
++    pub(crate) fn new<'a>(p0: &'a Sender<Vec<u8>>, p1: &'a mut Receiver<BusAction>) -> GameServerBusCommandHandler<'a> {
++        GameServerBusCommandHandler {
++            sender: p0,
++            receiver: p1,
++        }
++    }
++
++    async fn send_command(&self, command: GameServerAction) -> Result<(), SendError<Vec<u8>>> {
++        self.sender.send(ClientPackage::from(command).into()).await
++    }
++
++    pub async fn dispatch(&mut self) -> Result<(), anyhow::Error> {
++        let command = self.receiver.recv().await;
++        if command.is_none() {
++            anyhow::bail!("Command channel closed; no more commands to process")
++        }
++
++        let command = command.unwrap();
++        match command {
++            BusAction::Relay { message, .. } => self.handle_bus_relay(message).await?,
++            BusAction::AuthorizeResult { ok } => self.handle_bus_authorize(ok).await?,
++            _ => {}
++        }
++
++        Ok(())
++    }
++
++    async fn handle_bus_authorize(&mut self, ok: bool) -> Result<(), SendError<Vec<u8>>>{
++        if ok {
++            self.send_command(GameServerAction::Authorize {
++                result: AuthorizeClientMessage::Authorized,
++            })
++                .await
++        } else {
++            self.send_command(GameServerAction::Authorize {
++                result: AuthorizeClientMessage::Unauthorized,
++            })
++                .await
++        }
++    }
++
++    async fn handle_bus_relay(&mut self, message: String) -> Result<(), SendError<Vec<u8>>> {
++        // relay the message to the client
++        let message = message.chars().filter(|x| x.is_ascii()).collect::<String>();
++        self.send_command(GameServerAction::Relay { message }).await
++    }
++}
+diff --git a/src/main.rs b/src/main.rs
+index e2d1ff3..098c808 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -5,6 +5,7 @@ mod messages;
+ mod proto;
+ mod serverlist;
+ mod bus;
++mod instancehandlers;
+ 
+ use crate::discord::{make_discord_bot};
+ use crate::instance::GameServer;
+diff --git a/src/messages.rs b/src/messages.rs
+index b111cad..144e76c 100644
+--- a/src/messages.rs
++++ b/src/messages.rs
+@@ -41,6 +41,15 @@ impl From<GameServerAction> for Vec<u8> {
+     }
+ }
+ 
++impl GameServerAction {
++    pub fn requires_authorization(&self) -> bool {
++        match self {
++            GameServerAction::Authorize { .. } => false,
++            _ => true,
++        }
++    }
++}
++
+ // internal IPC message
+ #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+ pub enum BusAction {
+diff --git a/src/proto.rs b/src/proto.rs
+index 45bbe7a..1162070 100644
+--- a/src/proto.rs
++++ b/src/proto.rs
+@@ -1,19 +1,19 @@
+-use tokio::io::AsyncWriteExt;
+-use std::error::Error;
+-use std::io::ErrorKind::WouldBlock;
+-use std::fmt::Display;
+-use std::io;
+-use std::io::{Write};
++use crate::messages::{GameServerAction};
++use crate::serverlist::GameServerList;
+ use anyhow::Context;
+ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+ use log::{error, info, trace};
++use rhexdump::prelude::*;
++use std::error::Error;
++use std::fmt::Display;
++use std::io;
++use std::io::ErrorKind::WouldBlock;
++use std::io::Write;
+ use tokio::io::AsyncReadExt;
++use tokio::io::AsyncWriteExt;
+ use tokio::net::TcpStream;
+-use tokio::sync::mpsc::{Receiver, Sender};
+-use crate::instance::on_game_server_message_received;
+-use crate::messages::{GameServerAction, };
+-use crate::serverlist::{GameServerList};
+-use rhexdump::prelude::*;
++use tokio::sync::mpsc::{Receiver};
++use crate::instancehandlers::GameMessageReceivedHandler;
+ 
+ const MAGIC: u32 = 0xC0A7BEEF;
+ 
+@@ -54,7 +54,7 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024;
+ pub struct ClientPackage {
+     magic: u32,
+     size: u32,
+-    client_command: GameServerAction
++    client_command: GameServerAction,
+ }
+ 
+ #[derive(Debug, PartialEq)]
+@@ -91,7 +91,6 @@ impl ClientPackage {
+ 
+         let size = ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)?;
+ 
+-
+         let client_command: GameServerAction;
+         if size as usize <= bytes.len() - 8 {
+             let slice = &bytes[8..8 + size as usize];
+@@ -103,7 +102,7 @@ impl ClientPackage {
+         Ok(Self {
+             magic,
+             size,
+-            client_command
++            client_command,
+         })
+     }
+ }
+@@ -114,7 +113,7 @@ impl From<GameServerAction> for ClientPackage {
+         Self {
+             magic: MAGIC,
+             size: vec.len() as u32,
+-            client_command: value
++            client_command: value,
+         }
+     }
+ }
+@@ -130,101 +129,114 @@ impl Into<Vec<u8>> for ClientPackage {
+     }
+ }
+ 
++pub struct ProtocolHandler {
++    // bytes of stuff to send to the game server
++    game_data_queue: Receiver<Vec<u8>>,
++
++    // the socket to send to the game server
++    game_socket: TcpStream,
+ 
+-pub async fn game_socket_send_receive_all(
+-    game_data_queue: &mut Receiver<Vec<u8>>,
+-    game_socket: &mut TcpStream,
+-    game_server_list: &GameServerList,
++    // the id of the game server that we're communicating with
+     game_server_id: u32,
+-)
+-    -> Result<bool, anyhow::Error>
+- {
+-    let mut recv_buffer = vec![0; MAX_PACKET_SIZE];
+-    let mut pending_buffer = vec![];
+-
+-    tokio::select! {
+-        n = game_socket.read(&mut recv_buffer) => {
+-            match n {
+-                Ok(0) => {
+-                    info!("Connection from {:?} closed", game_socket.peer_addr());
+-                    return Ok(false);
+-                }
+-                Ok(n) => {
+-                    // hexdump::hexdump(&buf[..n]);
+-                    trace!("{}: Received {} bytes", game_server_id, n);
+ 
+-                    if n < 8 {
+-                        error!("invalid message size; expected at least 8 bytes, actual = {}", n);
++    // the handler that will handle the incoming messages from the game server
++    action_handler: GameMessageReceivedHandler,
++}
++
++// on OK case, if false, drop connection, if true, keep going
++impl ProtocolHandler {
++    pub fn new(
++        game_data_queue: Receiver<Vec<u8>>,
++        game_socket: TcpStream,
++        game_server_list: GameServerList,
++        game_server_id: u32,
++    ) -> Self {
++        Self {
++            game_data_queue,
++            game_socket,
++            game_server_id,
++            action_handler: GameMessageReceivedHandler::new(
++                game_server_id,
++                game_server_list
++            ),
++        }
++    }
++
++    pub async fn communicate(&mut self) -> Result<bool, anyhow::Error> {
++        let mut recv_buffer = vec![0; MAX_PACKET_SIZE];
++        let mut pending_buffer = vec![];
++
++        tokio::select! {
++            n = self.game_socket.read(&mut recv_buffer) => {
++                match n {
++                    Ok(0) => {
++                        info!("Connection from {:?} closed", self.game_socket.peer_addr());
+                         return Ok(false);
+                     }
++                    Ok(n) => {
++                        // hexdump::hexdump(&buf[..n]);
++                        trace!("{}: Received {} bytes", self.game_server_id, n);
+ 
+-                    // get the command from a messagepack frame describing the command
+-                    let mut start = 0;
+-                    let full_buffer = [&pending_buffer[..], &recv_buffer[..n]].concat();
+-                    pending_buffer.clear();
+-                    while start < full_buffer.len() {
+-                        let data = &full_buffer[start..];
+-                        let message = ClientPackage::from_bytes(data)
+-                            .with_context(|| rhexdumps!(data));
+-                        if message.is_err() {
+-                            if let Some(e) = message.err() {
+-                                if let Some(e2) = e.downcast_ref::<MessageParseError>() {
+-                                    if *e2 == MessageParseError::TooSmall {
+-                                        pending_buffer.extend_from_slice(data);
+-                                        return Ok(true);
++                        if n < 8 {
++                            error!("invalid message size; expected at least 8 bytes, actual = {}", n);
++                            return Ok(false);
++                        }
++
++                        // get the command from a messagepack frame describing the command
++                        let mut start = 0;
++                        let full_buffer = [&pending_buffer[..], &recv_buffer[..n]].concat();
++                        pending_buffer.clear();
++                        while start < full_buffer.len() {
++                            let data = &full_buffer[start..];
++                            let message = ClientPackage::from_bytes(data)
++                                .with_context(|| rhexdumps!(data));
++                            if message.is_err() {
++                                if let Some(e) = message.err() {
++                                    if let Some(e2) = e.downcast_ref::<MessageParseError>() {
++                                        if *e2 == MessageParseError::TooSmall {
++                                            pending_buffer.extend_from_slice(data);
++                                            return Ok(true);
++                                        }
+                                     }
++
++                                    error!("failed to parse message; err = {:?}", e);
+                                 }
+ 
+-                                error!("failed to parse message; err = {:?}", e);
++                                return Ok(false);
+                             }
+ 
+-                            return Ok(false);
+-                        }
++                            let message = message?;
+ 
+-                        let message = message?;
++                            if !message.is_valid() {
++                                error!("invalid message; magic = {}", message.magic);
++                                return Ok(false);
++                            }
++
++                            self.action_handler
++                            .dispatch(message.client_command.clone())
++                            .await?;
+ 
+-                        if !message.is_valid() {
+-                            error!("invalid message; magic = {}", message.magic);
++                            start += 8 + message.size as usize;
++                        }
++                    }
++                    Err(e) => {
++                        if e.kind() != WouldBlock {
++                            error!("failed to read from socket; err = {:?}", e);
+                             return Ok(false);
+                         }
+-
+-                        on_game_server_message_received(
+-                            game_server_id,
+-                            game_server_list,
+-                            message.client_command.clone()
+-                        ).await;
+-
+-                        start += 8 + message.size as usize;
+                     }
+                 }
+-                Err(e) => {
+-                    if e.kind() != WouldBlock {
+-                        error!("failed to read from socket; err = {:?}", e);
+-                        return Ok(false);
+-                    }
++            },
++            msg = self.game_data_queue.recv() => {
++                if let Some(msg) = msg {
++                    self.game_socket.write_all(&msg).await?;
++                    trace!("{}: Sent {} bytes", self.game_server_id, msg.len());
++                } else {
++                    return Ok(false);
+                 }
+             }
+-        },
+-        msg = game_data_queue.recv() => {
+-            if let Some(msg) = msg {
+-                game_socket.write_all(&msg).await?;
+-                trace!("{}: Sent {} bytes", game_server_id, msg.len());
+-            } else {
+-                return Ok(false);
+-            }
+         }
+-    }
+ 
+-    Ok(true)
+-}
+-
+-pub struct GameServerSender<'a>(pub &'a Sender<Vec<u8>>);
+-
+-impl<'a> GameServerSender<'a> {
+-    pub async fn send_command(&self, command: GameServerAction) {
+-        let message: Vec<u8> = ClientPackage::from(command).into();
+-        if let Err(e) = self.0.send(message).await {
+-            error!("Failed to send game server command: {}", e);
+-        }
++        Ok(true)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/serverlist.rs b/src/serverlist.rs
+index 16863d7..b071176 100644
+--- a/src/serverlist.rs
++++ b/src/serverlist.rs
+@@ -38,6 +38,10 @@ impl SharedBusContext {
+     pub fn bus_tx(&self) -> &Sender<BusAction> {
+         &self.bus_tx
+     }
++
++    pub async fn send(&self, bus_action: BusAction) -> Result<(), tokio::sync::mpsc::error::SendError<BusAction>>{
++        self.bus_tx.send(bus_action).await
++    }
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -68,6 +72,10 @@ impl GameServerList {
+         &self.bus
+     }
+ 
++    pub async fn send(&self, action: BusAction) -> Result<(), tokio::sync::mpsc::error::SendError<BusAction>> {
++        self.bus.send(action).await
++    }
++
+     pub fn authorize(&self, id: u32, key: String) -> bool {
+         let bus = self.bus.ctx.lock().unwrap();
+         server_by_id!(self, id, server {
