@@ -179,8 +179,21 @@ impl Bus {
 
 
     async fn handle_load(&mut self, sender_id: ServerId, name: String, password: String, connection_id: PlayerConnectionId) -> Result<()> {
-        let skills = self.character_manager.load_character(&name).await;
         let server = self.clients.get_server_copy_by_id(sender_id);
+
+        if self.clients.is_character_locked(&name, sender_id) {
+            if let Some(server) = server {
+                server.server_channel.send(BusAction::LoadResult {
+                    status: LoadStatus::CharacterLocked,
+                    connection_id,
+                    skills: None,
+                }).await?;
+            }
+
+            return Ok(());
+        }
+
+        let skills = self.character_manager.load_character(&name).await;
 
         if let Err(e) = skills {
             self.clients.unlock_character(&name);
@@ -214,6 +227,10 @@ impl Bus {
         };
 
         if let Some(server) = server {
+            if skills.is_some() {
+                self.clients.lock_character(name, sender_id);
+            }
+
             server.server_channel.send(BusAction::LoadResult {
                 status: status.unwrap_or(LoadStatus::Ok),
                 connection_id,

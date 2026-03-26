@@ -75,6 +75,36 @@ impl GameServerList {
         }
     }
 
+    /// ```rust
+    ///     /**
+    ///      * Checks if a character is locked by a different server.
+    ///      *
+    ///      * This function determines whether the specified character (identified by `p0`)
+    ///      * is currently locked by another server. A character is considered locked if 
+    ///      * its entry exists in the `locked_characters` map and the server ID associated 
+    ///      * with the character is not the same as the given `sender_id`.
+    ///      *
+    ///      * # Arguments
+    ///      *
+    ///      * * `p0` - A reference to a `String` representing the identifier of the character 
+    ///      *          to check for a lock.
+    ///      * * `sender_id` - The `ServerId` of the server requesting the lock status.
+    ///      *
+    ///      * # Returns
+    ///      *
+    ///      * * `true` if the character is locked by another server.
+    ///      * * `false` if the character is not locked or is locked by the given `sender_id`.
+    ///      *
+    ///      * # Panics
+    ///      *
+    ///      * This function will panic if the lock on `self.locked_characters` cannot be acquired.
+    ///      */
+    /// ```
+    pub(crate) fn is_character_locked(&self, p0: &String, sender_id: ServerId) -> bool {
+        let lock = self.locked_characters.lock().unwrap();
+        lock.contains_key(p0) && *lock.get(p0).unwrap() != sender_id
+    }
+
     pub fn lock_stash(&self, owner_name: String, server_id: ServerId) -> bool {
         let mut lock = self.locked_stashes.lock().unwrap();
         if lock.get(&owner_name).is_some_and(|&id| id != server_id) {

@@ -73,6 +73,12 @@ impl GameServer {
             let alive_bus_communication = alive;
             loop {
                 if let Err(e) = handler.dispatch().await {
+                    // we were disconnected, so we can stop processing messages
+                    if !alive_bus_communication.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // there was some error, so we can't continue processing messages, so we stop
                     error!("Failed to process bus messages: {:?}", e);
                     break;
                 }

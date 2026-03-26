@@ -18,7 +18,8 @@ pub enum LoadStatus {
     Ok,
     WrongPassword,
     CharacterNotFound,
-    InternalError
+    InternalError,
+    CharacterLocked
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -57,7 +58,7 @@ pub enum GameServerAction {
 
 
     // load a character
-    Load { name: String, password: String, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
+    Load { name: String, password: String, connection_id: PlayerConnectionId },
 
     LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
 
