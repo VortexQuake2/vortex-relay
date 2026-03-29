@@ -1,13 +1,13 @@
 use crate::character::CharacterManager;
 use crate::discord::DISCORD_CHANNEL;
 use crate::instance::BusAction;
-use crate::serverlist::{GameServerList, ServerId};
+use crate::serverlist::{GameServerList, ServerId, StashLock};
 use log::{debug, error, info, trace};
 use serenity::all::Channel::Guild;
 use serenity::all::{ChannelId, CreateMessage, GuildChannel, Http};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
-use crate::messages::{LoadStatus, PlayerConnectionId};
+use crate::messages::{LoadStatus, PlayerConnectionId, SetOwnerStatus, StashStatus};
 use anyhow::Result;
 use crate::models::{Item, Skills};
 
@@ -73,10 +73,10 @@ impl Bus {
                 BusAction::SaveAndClose { sender_id, name, connection_id, skills } => self.handle_save_and_close(sender_id, name, connection_id, skills).await,
                 BusAction::StashPage { sender_id, name, page, connection_id } => self.handle_stash_page(sender_id, name, page, connection_id).await,
                 BusAction::StashTake { sender_id, name, page, index, connection_id } => self.handle_stash_take(sender_id, name, page, index, connection_id).await,
-                BusAction::StashStore { sender_id, name, page, index, item, connection_id } => self.handle_stash_put(sender_id, name, page, index, item, connection_id).await,
+                BusAction::StashStore { sender_id, name,  item, connection_id } => self.handle_stash_put(sender_id, name, item, connection_id).await,
                 BusAction::StashOpen { sender_id, name, connection_id } => self.handle_stash_open(sender_id, name, connection_id).await,
                 BusAction::StashClose { sender_id, name, connection_id } => self.handle_stash_close(sender_id, name, connection_id).await,
-                BusAction::StashCloseById { sender_id, name, id, connection_id } => self.handle_stash_close_by_id(sender_id, name, id, connection_id).await,
+                BusAction::StashCloseById { sender_id, name, connection_id } => self.handle_stash_close_by_id(sender_id, name, connection_id).await,
                 BusAction::SetOwner { sender_id, name, password, reset, owner, connection_id } => self.handle_set_owner(sender_id, name, password, reset, owner, connection_id).await,
                 BusAction::ServerOffline { sender_id: id } => self.handle_server_offline(id).await,
                 BusAction::AuthorizeRequest {
@@ -88,7 +88,13 @@ impl Bus {
                     self.handle_auth_request(id, key, hostname, player_count)
                         .await
                 }
-                BusAction::AuthorizeResult { .. } | BusAction::LoadResult { .. } | BusAction::StashPageResult { .. } | BusAction::StashTakeResult { .. } | BusAction::StashStoreResult { .. } | BusAction::StashOpenResult { .. } => {
+                BusAction::AuthorizeResult { .. } |
+                BusAction::LoadResult { .. } |
+                BusAction::StashPageResult { .. } |
+                BusAction::StashTakeResult { .. } |
+                BusAction::StashStoreResult { .. } |
+                BusAction::SetOwnerResult { .. } |
+                BusAction::StashOpenResult { .. } => {
                     /* this is not something _we_ must handle */
                     Ok(())
                 }
@@ -269,7 +275,6 @@ impl Bus {
 
         if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
             server.server_channel.send(BusAction::StashPageResult {
-                name,
                 page,
                 items,
                 connection_id,
@@ -284,7 +289,7 @@ impl Bus {
         let mut item = None;
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
 
-        if self.clients.lock_stash(owner.clone(), sender_id) {
+        if self.clients.is_stash_exclusive_access(owner.clone(), StashLock::new(sender_id, name.clone())) {
             let res = self.character_manager.take_stash_item(&owner, page, index).await;
             match res {
                 Ok(i) => {
@@ -297,12 +302,10 @@ impl Bus {
                     return Err(e);
                 }
             }
-            self.clients.unlock_stash(&owner);
         }
 
         if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
             server.server_channel.send(BusAction::StashTakeResult {
-                name,
                 page,
                 index,
                 success,
@@ -314,39 +317,57 @@ impl Bus {
         Ok(())
     }
 
-    async fn handle_stash_put(&mut self, sender_id: ServerId, name: String, page: i32, index: i32, item: Item, connection_id: PlayerConnectionId) -> Result<()> {
-        let mut success = false;
+    async fn handle_stash_put(&mut self, sender_id: ServerId, name: String, item: Item, connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
 
-        if self.clients.lock_stash(owner.clone(), sender_id) {
-            let res = self.character_manager.put_stash_item(&owner, page, index, &item).await;
-            match res {
-                Ok(s) => success = s,
+        if !self.clients.is_stash_exclusive_access(owner.clone(), StashLock::new(sender_id, name.clone())) {
+            let pos = self.character_manager.find_free_stash_slot(&owner).await?;
+            let res = self.character_manager.put_stash_item(&owner, pos, &item).await;
+            return match res {
+                Ok(s) => {
+                    if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
+                        server.server_channel.send(BusAction::StashStoreResult {
+                            page: pos.page,
+                            index: pos.slot,
+                            success: true,
+                            connection_id,
+                        }).await?
+                    }
+                    Ok(())
+                },
                 Err(e) => {
                     error!("Failed to put item into stash for {} (owner {}): {:?}", name, owner, e);
-                    self.clients.unlock_stash(&owner);
-                    return Err(e);
+                    if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
+                        server.server_channel.send(BusAction::StashStoreResult {
+                            page: pos.page,
+                            index: pos.slot,
+                            success: false,
+                            connection_id,
+                        }).await?;
+                    }
+                    Err(e)
                 }
             }
-            self.clients.unlock_stash(&owner);
         }
 
-        if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
-            server.server_channel.send(BusAction::StashStoreResult {
-                name,
-                page,
-                index,
-                success,
-                connection_id,
-            }).await?;
-        }
-
-        Ok(())
+        anyhow::bail!("Stash is not owned by this server");
     }
 
     async fn handle_stash_open(&mut self, sender_id: ServerId, name: String, connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
-        info!("Stash opened for {} (owner {})", name, owner);
+        info!("Stash opened for {} (owner {})", &name, owner);
+
+        if !self.clients.lock_stash(owner.clone(), StashLock::new(sender_id, name.clone())) {
+            if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
+                server.server_channel.send(BusAction::StashOpenResult {
+                    items: None,
+                    status: StashStatus::StashLocked,
+                    connection_id,
+                }).await?;
+            }
+
+            return Ok(());
+        }
 
         // return items immediately
         let items = self.character_manager.get_stash_page(&owner, 0).await;
@@ -359,8 +380,8 @@ impl Bus {
 
         if let Some(server) = self.clients.get_server_copy_by_id(sender_id) {
             server.server_channel.send(BusAction::StashOpenResult {
-                name,
-                items,
+                items: Some(items),
+                status: StashStatus::Ok,
                 connection_id,
             }).await?;
         }
@@ -370,22 +391,39 @@ impl Bus {
 
     async fn handle_stash_close(&mut self, _sender_id: ServerId, name: String, _connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
+        self.clients.unlock_stash(&owner);
         info!("Stash closed for {} (owner {})", name, owner);
         Ok(())
     }
 
-    async fn handle_stash_close_by_id(&mut self, _sender_id: ServerId, name: String, id: i32, _connection_id: PlayerConnectionId) -> Result<()> {
+    async fn handle_stash_close_by_id(&mut self, _sender_id: ServerId, name: String, _connection_id: PlayerConnectionId) -> Result<()> {
         let owner = self.character_manager.get_owner(&name).await.unwrap_or(name.clone());
-        info!("Stash closed by ID {} for {} (owner {})", id, name, owner);
+        info!("Stash closed by ID for {} (owner {})",  name, owner);
         Ok(())
     }
 
     async fn handle_set_owner(&mut self, _sender_id: ServerId, name: String, password: String, reset: bool, owner: String, _connection_id: PlayerConnectionId) -> Result<()> {
-        info!("SetOwner called for character {} by owner {}, reset: {}", name, owner, reset);
-        if let Err(e) = self.character_manager.set_owner(&name, &password, reset, &owner).await {
+        info!("SetOwner called for character {} setting owner {}, reset: {}", name, owner, reset);
+        let result = self.character_manager.set_owner(&name, &password, reset, &owner).await;
+
+        if let Err(e) = result {
             error!("Failed to set owner for character {}: {:?}", name, e);
             return Err(e);
         }
+
+        if let Ok(status) = result {
+            if let Some(server) = self.clients.get_server_copy_by_id(_sender_id) {
+                let new_owner = if status == SetOwnerStatus::Ok { Some(owner) } else { None };
+                server.server_channel.send(
+                    BusAction::SetOwnerResult {
+                        status,
+                        connection_id: _connection_id,
+                        new_owner
+                    }
+                ).await?;
+            }
+        }
+
         Ok(())
     }
 

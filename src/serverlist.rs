@@ -47,11 +47,27 @@ impl SharedBusContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashLock {
+    // server that is locking the stash
+    server_id: ServerId,
+
+    // character that is locking the stash
+    lock_owner: String
+}
+
+impl StashLock {
+    pub fn new(server_id: ServerId, lock_owner: String) -> Self {
+        Self { server_id, lock_owner }
+    }
+}
+
+
 #[derive(Debug, Clone)]
 pub struct GameServerList {
     list: Arc<Mutex<Vec<VortexServer>>>,
     locked_characters: Arc<Mutex<HashMap<String, ServerId>>>,
-    locked_stashes: Arc<Mutex<HashMap<String, ServerId>>>,
+    locked_stashes: Arc<Mutex<HashMap<String, StashLock>>>,
     bus: SharedBusContext,
 }
 
@@ -80,13 +96,13 @@ impl GameServerList {
     ///      * Checks if a character is locked by a different server.
     ///      *
     ///      * This function determines whether the specified character (identified by `p0`)
-    ///      * is currently locked by another server. A character is considered locked if 
-    ///      * its entry exists in the `locked_characters` map and the server ID associated 
+    ///      * is currently locked by another server. A character is considered locked if
+    ///      * its entry exists in the `locked_characters` map and the server ID associated
     ///      * with the character is not the same as the given `sender_id`.
     ///      *
     ///      * # Arguments
     ///      *
-    ///      * * `p0` - A reference to a `String` representing the identifier of the character 
+    ///      * * `p0` - A reference to a `String` representing the identifier of the character
     ///      *          to check for a lock.
     ///      * * `sender_id` - The `ServerId` of the server requesting the lock status.
     ///      *
@@ -105,12 +121,39 @@ impl GameServerList {
         lock.contains_key(p0) && *lock.get(p0).unwrap() != sender_id
     }
 
-    pub fn lock_stash(&self, owner_name: String, server_id: ServerId) -> bool {
+    // returns true if have exclusive access to the stash
+    pub fn is_stash_exclusive_access(&self, p0: String, p1: StashLock) -> bool {
+        let lock = self.locked_stashes.lock().unwrap();
+        let contains_key = lock.contains_key(&p0);
+
+        if !contains_key {
+            return false
+        }
+
+        let stashlock = lock.get(&p0).unwrap();
+        stashlock == &p1
+    }
+
+    // returns true if we cannot access the stash
+    pub(crate) fn is_stash_locked(&self, p0: String, p1: StashLock) -> bool {
+        let lock = self.locked_stashes.lock().unwrap();
+        let contains_key = lock.contains_key(&p0);
+
+        if !contains_key {
+            return false
+        }
+
+        let stashlock = lock.get(&p0).unwrap();
+        stashlock != &p1
+    }
+
+    pub fn lock_stash(&self, owner_name: String, lock_owner: StashLock) -> bool {
         let mut lock = self.locked_stashes.lock().unwrap();
-        if lock.get(&owner_name).is_some_and(|&id| id != server_id) {
+        let stashlock = lock.get(&owner_name);
+        if stashlock.is_some_and(|id| id != &lock_owner) {
             return false;
         }
-        lock.insert(owner_name, server_id);
+        lock.insert(owner_name,  lock_owner);
         true
     }
 
@@ -140,7 +183,7 @@ impl GameServerList {
         }
         {
             let mut lock = self.locked_stashes.lock().unwrap();
-            lock.retain(|_, id| *id != server_id);
+            lock.retain(|_, id| id.server_id != server_id);
         }
     }
 

@@ -11,7 +11,7 @@ pub const MAX_ABILITIES: usize = 160;
 pub const MAX_TALENTS: usize = 15;
 pub const MAX_ITEMS: usize = 256;
 
-#[derive(Debug, Clone, Copy, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct IModifier {
     pub modifier_type: i32,
     pub index: i32,
@@ -19,7 +19,21 @@ pub struct IModifier {
     pub set: i32,
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
+impl IModifier {
+    pub fn new() -> IModifier {
+        IModifier { modifier_type: 0, index: 0, value: 0, set: 0 }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.modifier_type == 0
+    }
+
+    pub fn nullify(&mut self) {
+        *self = IModifier::new();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
     pub item_type: i32,
     pub item_level: i32,
@@ -34,40 +48,57 @@ pub struct Item {
     pub is_unique: i32,
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
-pub struct Upgrade {
-    pub level: i32,
-    pub current_level: i32,
-    pub max_level: i32,
-    pub hard_max: i32,
-    pub modifier: i32,
-    pub delay: f32,
-    pub charge: i32,
-    pub ammo: i32,
-    pub max_ammo: i32,
-    pub ammo_regenframe: i32,
-    pub disable: i32,
-    pub general_skill: i32,
-    pub hidden: i32,
-    pub runed: i32,
+impl Item {
+    pub fn new() -> Item {
+        Item {
+            item_type: 0,
+            item_level: 0,
+            quantity: 0,
+            untradeable: 0,
+            id: "".to_string(),
+            name: "".to_string(),
+            num_mods: 0,
+            set_code: 0,
+            class_num: 0,
+            modifiers: [IModifier::new(); MAX_VRXITEMMODS],
+            is_unique: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.item_type == 0
+    }
+
+    pub fn nullify(&mut self) {
+        *self = Item::new();
+    }
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Upgrade {
+    pub level: i32,
+    pub soft_max: i32,
+    pub hard_max: i32,
+    pub modifier: i32,
+    pub disable: i32,
+    pub general_skill: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Talent {
     pub id: i32,
     pub upgrade_level: i32,
     pub max_level: i32,
-    pub delay: f32,
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TalentList {
     pub count: i32,
     pub talent_points: i32,
     pub talent: [Talent; MAX_TALENTS],
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeaponSkill {
     pub level: i32,
     pub current_level: i32,
@@ -75,7 +106,7 @@ pub struct WeaponSkill {
     pub hard_max: i32,
 }
 
-#[derive(Debug, Clone, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weapon {
     pub disable: i32,
     pub mods: [WeaponSkill; MAX_WEAPONMODS],
@@ -118,7 +149,7 @@ impl std::ops::Deref for BigUpgradeArray {
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
-impl std::clone::Clone for BigUpgradeArray {
+impl Clone for BigUpgradeArray {
     fn clone(&self) -> Self { BigUpgradeArray(self.0.clone()) }
 }
 
@@ -188,8 +219,8 @@ pub struct Skills {
     pub member_since: String,
     pub last_played: String,
     pub player_name: String,
-    pub owner: String,
-    pub email: String,
+    pub owner: Option<String>,
+    pub master_password: Option<String>,
     pub title: String,
 
     pub nerfme: i32,

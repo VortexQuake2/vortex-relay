@@ -22,7 +22,7 @@ pub enum LoadStatus {
     CharacterLocked
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum SetOwnerStatus {
     Ok,
     WrongPassword,
@@ -31,61 +31,67 @@ pub enum SetOwnerStatus {
     OwnerAlreadySet
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum StashStatus {
+    Ok,
+    StashLocked,
+}
+
 // messages we get and send to a q2 server
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "t")]
 pub enum GameServerAction {
-    // server is closing
-    Exit,
-
+    // bidirectional
+    // ========================================
     // player sends a message or play a message in our server
     Relay { message: String },
-
-    // client finishes connecting and has entered the game
-    ClientBegin { name: String },
-
-    // client disconnects from the game
-    ClientDisconnect { name: String },
-
-    // map loaded
-    SpawnEntities { mapname: String },
-
-    // notification that client logs into their player character
-    Login { name: String },
 
     // try and authorize our instance
     Authorize { result: AuthorizeClientMessage },
 
 
+    // server to relay
+    // ========================================
+    // server is closing
+    Exit,
+    // client finishes connecting and has entered the game
+    ClientBegin { name: String },
+    // client disconnects from the game
+    ClientDisconnect { name: String },
+    // map loaded
+    SpawnEntities { mapname: String },
+    // notification that client logs into their player character
+    Login { name: String },
     // load a character
-    Load { name: String, password: String, connection_id: PlayerConnectionId },
-
-    LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
-
+    Load { name: String, connection_id: PlayerConnectionId, password: String,  },
     // save a character
     Save { name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
-
-    // save and close character (unlock)
+    // save and close character (unlocks it)
     SaveAndClose { name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
-
-    // stash commands
-    StashPage { name: String, page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId },
-
     // stash take needs to be properly implemented on the C side - if the inventory is full it has to put it back, too
     // these movements need to be logged in case of network or software failure with a date and time
-    StashTake { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId },
-    
+    StashTake { name: String, connection_id: PlayerConnectionId, page: i32, index: i32,  },
     // This is "StashStore" in C.
-    StashStore { name: String, page: i32, index: i32, item: Item, success: bool, connection_id: PlayerConnectionId },
-
+    StashStore { name: String, connection_id: PlayerConnectionId, item: Item },
     StashOpen { name: String, connection_id: PlayerConnectionId },
-    StashOpenResult { name: String, connection_id: PlayerConnectionId, items: Vec<Option<Item>> },
+    StashPage { name: String, connection_id: PlayerConnectionId, page: i32 },
     StashClose { name: String, connection_id: PlayerConnectionId },
-    StashCloseById { name: String, id: i32, connection_id: PlayerConnectionId },
+    StashCloseById { name: String, connection_id: PlayerConnectionId },
+    SetOwner { name: String, connection_id: PlayerConnectionId, password: String, reset: bool, owner: String,  },
 
-    // the master password field that allows us to set an owner is called "email", but it really isn't!
-    SetOwner { name: String, password: String, reset: bool, owner: String, connection_id: PlayerConnectionId },
-    SetOwnerResult { connection_id: PlayerConnectionId, status: SetOwnerStatus }
+    // relay to server
+    // ========================================
+    LoadResult { connection_id: PlayerConnectionId, status: LoadStatus, skills: Option<Box<Skills>> },
+    StashPageResult { connection_id: PlayerConnectionId, page: i32, items: Vec<Option<Item>>,  },
+    StashOpenResult {
+        connection_id: PlayerConnectionId,
+        status: StashStatus,
+        items: Option<Vec<Option<Item>>>
+    },
+
+    SetOwnerResult { connection_id: PlayerConnectionId, status: SetOwnerStatus, new_owner: Option<String> },
+    StashTakeResult { connection_id: PlayerConnectionId, item: Option<Item> },
+    StashStoreResult { connection_id: PlayerConnectionId, item: Option<Item> }
 
     // TODO: character logs! they're currently purely on the C side (with raw files) but we want something
     // we can audit across servers. (Ideally, they identify the server itself.)
@@ -124,23 +130,21 @@ impl GameServerAction {
 // internal IPC message
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub enum BusAction {
+    // bidirectional
     Relay { sender_id: ServerId, message: String },
+
+    // game server to relay
+    // ======================================================
     Load { sender_id: ServerId, name: String, password: String, connection_id: PlayerConnectionId },
     Save { sender_id: ServerId, name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
     SaveAndClose { sender_id: ServerId, name: String, connection_id: PlayerConnectionId, skills: Box<Skills> },
     StashPage { sender_id: ServerId, name: String, page: i32, connection_id: PlayerConnectionId },
-    StashTake { sender_id: ServerId, name: String, page: i32, index: i32, connection_id: PlayerConnectionId },
-    StashStore { sender_id: ServerId, name: String, page: i32, index: i32, item: Item, connection_id: PlayerConnectionId },
+    StashTake { sender_id: ServerId, name: String, connection_id: PlayerConnectionId, page: i32, index: i32,  },
+    StashStore { sender_id: ServerId, name: String, item: Item, connection_id: PlayerConnectionId },
     StashOpen { sender_id: ServerId, name: String, connection_id: PlayerConnectionId },
     StashClose { sender_id: ServerId, name: String, connection_id: PlayerConnectionId },
-    StashCloseById { sender_id: ServerId, name: String, id: i32, connection_id: PlayerConnectionId },
+    StashCloseById { sender_id: ServerId, name: String, connection_id: PlayerConnectionId },
     SetOwner { sender_id: ServerId, name: String, password: String, reset: bool, owner: String, connection_id: PlayerConnectionId },
-
-    LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
-    StashPageResult { name: String, page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId },
-    StashTakeResult { name: String, page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId },
-    StashStoreResult { name: String, page: i32, index: i32, success: bool, connection_id: PlayerConnectionId },
-    StashOpenResult { name: String, connection_id: PlayerConnectionId, items: Vec<Option<Item>> },
 
     // allow server to connect to relay
     AuthorizeRequest {
@@ -149,10 +153,19 @@ pub enum BusAction {
         hostname: String,
         player_count: u32,
     },
-    AuthorizeResult { ok: bool },
 
     // the q2 server instance has gone offline
     ServerOffline { sender_id: ServerId },
+
+    // relay to game server
+    // ======================================================
+    LoadResult { status: LoadStatus, connection_id: PlayerConnectionId, skills: Option<Box<Skills>> },
+    StashPageResult {  page: i32, items: Vec<Option<Item>>, connection_id: PlayerConnectionId },
+    StashTakeResult {  page: i32, index: i32, success: bool, item: Option<Item>, connection_id: PlayerConnectionId },
+    StashStoreResult {  page: i32, index: i32, success: bool, connection_id: PlayerConnectionId },
+    StashOpenResult { connection_id: PlayerConnectionId, status: StashStatus, items: Option<Vec<Option<Item>>> },
+    AuthorizeResult { ok: bool },
+    SetOwnerResult { status: SetOwnerStatus, connection_id: PlayerConnectionId, new_owner: Option<String> },
 }
 
 
